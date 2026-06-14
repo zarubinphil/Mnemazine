@@ -1,7 +1,7 @@
 # Mnemazine
 
 <p align="center">
-  <img src="docs/assets/logo/mnemazine-logo.svg" width="220" alt="Mnemazine logo: Mnemosyne as a minimal memory spiral and graph">
+  <img src="docs/assets/logo/mnemazine-logo.png" width="240" alt="Mnemazine logo: Mnemosyne as a memory spiral and knowledge graph">
 </p>
 
 **Mnemazine** is an open-source personal knowledge system inspired by **Mnemosyne**, the Greek goddess of memory. The name is intentionally brandable, while the idea is classical: memory is not a dump of files. Memory is formed when raw experience is recognized, checked, connected, rewritten, and made reusable.
