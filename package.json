@@ -1,0 +1,27 @@
+{
+  "name": "mnemazine",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Open-source memory system that turns raw inputs into verified reusable knowledge.",
+  "scripts": {
+    "install:local": "bash install.sh",
+    "run": "node scripts/mnemazine-run.mjs",
+    "ingest:site": "node scripts/mnemazine-ingest-site.mjs",
+    "weekly": "node scripts/mnemazine-weekly-brief-html.mjs",
+    "quality": "node scripts/mnemazine-vault-quality-gate.mjs",
+    "public-check": "bash scripts/check-public-release.sh"
+  },
+  "keywords": [
+    "knowledge-base",
+    "obsidian",
+    "agent-skills",
+    "ocr",
+    "graphify",
+    "personal-knowledge-management"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

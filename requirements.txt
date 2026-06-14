@@ -1,0 +1,8 @@
+markitdown
+fastembed
+pymupdf
+pypdf
+reportlab
+pillow
+openai-whisper
+graphifyy
