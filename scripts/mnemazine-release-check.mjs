@@ -81,7 +81,9 @@ async function demoSmoke() {
   const inboxFiles = await fs.readdir(inbox)
   if (inboxFiles.length !== 0) throw new Error(`demo smoke failed: inbox not empty (${inboxFiles.join(', ')})`)
 
-  const notes = (await listFiles(vault)).filter(file => file.endsWith('.md'))
+  const notes = (await listFiles(vault))
+    .filter(file => file.endsWith('.md'))
+    .filter(file => !file.split(path.sep).includes('graphify-out'))
   if (notes.length !== 1) throw new Error(`demo smoke failed: expected 1 note, got ${notes.length}`)
   const note = await fs.readFile(notes[0], 'utf8')
   const forbidden = [/intake-draft/i, /draft-local/i, /\btemp_image/i, /\bIMG_\d+/, /\.(WEBP|PNG|JPE?G|HEIC|TIFF)\b/]
