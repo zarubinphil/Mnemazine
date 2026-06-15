@@ -316,6 +316,22 @@ This public repository intentionally excludes:
 - private project names;
 - local absolute paths from the original development machine.
 
+Before publishing a release, run the full local gate:
+
+```bash
+npm run release-check
+```
+
+It checks script syntax, runs a temporary demo intake, verifies archive-after-quality behavior, runs the demo vault quality gate, scans for private markers/secrets, and checks that the public description stays bilingual.
+
+Перед публикацией запускайте полный локальный gate:
+
+```bash
+npm run release-check
+```
+
+Он проверяет синтаксис, временный demo-intake, архивирование только после quality gate, качество demo vault, отсутствие приватных маркеров/секретов и двуязычное описание.
+
 ## License
 
 MIT.

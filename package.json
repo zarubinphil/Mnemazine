@@ -12,7 +12,8 @@
     "ingest:site": "node scripts/mnemazine-ingest-site.mjs",
     "weekly": "node scripts/mnemazine-weekly-brief-html.mjs",
     "quality": "node scripts/mnemazine-vault-quality-gate.mjs",
-    "public-check": "bash scripts/check-public-release.sh"
+    "public-check": "bash scripts/check-public-release.sh",
+    "release-check": "node scripts/mnemazine-release-check.mjs"
   },
   "keywords": [
     "knowledge-base",
