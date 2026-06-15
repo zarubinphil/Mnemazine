@@ -16,3 +16,16 @@ reports/*
 !reports/.gitkeep
 graphify-out/
 *.log
+
+# Private/generated vault maintenance waves. They may contain local vault paths,
+# project names, or one-off migration content and must not ship publicly.
+scripts/mnemazine-*-wave.mjs
+scripts/mnemazine-apply-capability-links.mjs
+scripts/mnemazine-audit-live-vault.mjs
+scripts/mnemazine-atomize-collections.mjs
+scripts/mnemazine-build-capability-map.mjs
+scripts/mnemazine-dedupe-atomized-blocks.mjs
+scripts/mnemazine-normalize-skill-notes.mjs
+scripts/mnemazine-refresh-core-indexes.mjs
+scripts/mnemazine-route-alias-sections-wave.mjs
+scripts/mnemazine-route-semantic-wave-*.mjs
