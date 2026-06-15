@@ -1,14 +1,14 @@
 # Mnemazine
 
 <p align="center">
-  <img src="docs/assets/logo/mnemazine-logo.png" width="240" alt="Mnemazine logo: Mnemosyne as a memory spiral and knowledge graph">
+  <img src="docs/assets/hero/mnemazine-hero.png" width="760" alt="Mnemazine — Mnemosyne, goddess of memory, weaving raw fragments into a living knowledge graph">
 </p>
 
 **Mnemazine** is an open-source personal knowledge system inspired by **Mnemosyne**, the Greek goddess of memory. The name is intentionally brandable, while the idea is classical: memory is not a dump of files. Memory is formed when raw experience is recognized, checked, connected, rewritten, and made reusable.
 
 Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base.
 
-![Mnemazine pipeline](docs/assets/screenshots/01-inbox-to-knowledge.svg)
+![Mnemazine — from raw fragments to an ordered knowledge graph](docs/assets/hero/mnemazine-pipeline.png)
 
 ## What It Is
 
