@@ -1,16 +1,16 @@
 # Mnemazine
 
+🇬🇧 **English** · [🇷🇺 Русский](README.ru.md)
+
 <p align="center">
   <img src="docs/assets/hero/mnemazine-hero.png" width="760" alt="Mnemazine — Mnemosyne, goddess of memory, weaving raw fragments into a living knowledge graph">
 </p>
 
 **Mnemazine** is an open-source personal knowledge system inspired by **Mnemosyne**, the Greek goddess of memory. The name is intentionally brandable, while the idea is classical: memory is not a dump of files. Memory is formed when raw experience is recognized, checked, connected, rewritten, and made reusable.
 
-**English:** Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base. It extracts locally first, stores final notes only, keeps source hashes for provenance, updates a graph when available, and rejects raw OCR/draft dumps before they become memory.
+Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base. It extracts locally first, stores final notes only, keeps source hashes for provenance, updates a graph when available, and rejects raw OCR/draft dumps before they become memory.
 
-**Русский:** Mnemazine превращает скриншоты, PDF, веб-страницы, видео, заметки, гайды, GitHub-репозитории и случайные фрагменты в чистую Obsidian-совместимую базу знаний. Система сначала извлекает данные локально, хранит только финальные заметки, сохраняет хэши источников для проверяемости, обновляет граф при наличии Graphify и не пропускает сырой OCR/draft-мусор в память.
-
-> Memory, not a dump. Память, не свалка.
+> Memory, not a dump.
 
 ![Mnemazine — from raw fragments to an ordered knowledge graph](docs/assets/hero/mnemazine-pipeline.png)
 
@@ -28,22 +28,6 @@ It does not save raw OCR into your vault. It does not keep vague summaries that 
 - weekly HTML briefings with local state: `read`, `work on it`, `forget`.
 
 The goal is simple: future you should not reread twenty screenshots, a whole guide, or a messy transcript. Future you should open one good note and immediately understand what the knowledge is, why it matters, how to use it, and what evidence supports it.
-
-## Что это
-
-Mnemazine — локальная система переработки входящих материалов в долговечные знания.
-
-Она не кладёт в vault сырой OCR, случайные имена файлов, скриншоты без контекста и непроверяемые копипасты. Вместо этого создаёт финальные заметки:
-
-- понятный заголовок;
-- краткая суть;
-- зачем это важно;
-- как использовать;
-- source hash / `local-media:<hash>` вместо приватного имени файла;
-- статус проверки;
-- связи и повторное использование.
-
-Цель: будущий ты открывает не пачку скринов, а одну нормальную заметку, которую можно применить, проверить, связать с проектом или превратить в skill/agent/checklist.
 
 ## Why It Saves Tokens
 
@@ -121,30 +105,6 @@ The run performs:
 
 The default runner is intentionally conservative. It does not publish data, use private cookies, or send local files to external services. It writes local notes and archives processed source files under `.mnemazine/archive/`.
 
-## Локальный запуск
-
-Положите материалы в:
-
-```text
-~/Desktop/Mnemazine/inbox
-```
-
-Запустите:
-
-```bash
-node scripts/mnemazine-run.mjs
-```
-
-Прогон делает:
-
-1. перепись файлов;
-2. SHA-256 дедупликацию;
-3. локальное извлечение текста, если возможно;
-4. создание финальной заметки с `source_ref` и `source_hash`;
-5. gate качества vault;
-6. перенос исходников в `.mnemazine/archive/` только после зелёного gate;
-7. обновление Graphify, если он установлен.
-
 ## Website Ingestion
 
 Mnemazine can ingest a website and convert its useful pages into structured notes:
@@ -201,20 +161,6 @@ Run the gate manually:
 ```bash
 node scripts/mnemazine-vault-quality-gate.mjs
 ```
-
-## Контракт качества
-
-Vault хранит финальное знание, не сырьё.
-
-Gate отклоняет:
-
-- сырой OCR;
-- `intake-draft` / `draft-local`;
-- видимые `temp_image_*`, `IMG_*.PNG`, `.WEBP`, `.PNG` внутри заметок;
-- заметки без смысла или источника;
-- копипасту без проверки.
-
-Graphify-артефакты и backup-папки не считаются knowledge notes и исключены из проверки.
 
 ## Agent Skills
 
@@ -322,15 +268,7 @@ Before publishing a release, run the full local gate:
 npm run release-check
 ```
 
-It checks script syntax, runs a temporary demo intake, verifies archive-after-quality behavior, runs the demo vault quality gate, scans for private markers/secrets, and checks that the public description stays bilingual.
-
-Перед публикацией запускайте полный локальный gate:
-
-```bash
-npm run release-check
-```
-
-Он проверяет синтаксис, временный demo-intake, архивирование только после quality gate, качество demo vault, отсутствие приватных маркеров/секретов и двуязычное описание.
+It checks script syntax, runs a temporary demo intake, verifies archive-after-quality behavior, runs the demo vault quality gate, scans for private markers/secrets, and checks that the public description and both READMEs stay bilingual.
 
 ## License
 

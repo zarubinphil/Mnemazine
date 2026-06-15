@@ -107,12 +107,29 @@ async function repoMetadataCheck() {
     throw new Error('package description must be bilingual')
   }
 
-  const readme = await fs.readFile(path.join(ROOT, 'README.md'), 'utf8')
-  if (!readme.includes('https://github.com/zarubinphil/Mnemazine.git')) {
-    throw new Error('README clone URL is stale or missing')
+  // Bilingual READMEs as two files: README.md (English entry) + README.ru.md (Russian).
+  const en = await fs.readFile(path.join(ROOT, 'README.md'), 'utf8')
+  const ru = await fs.readFile(path.join(ROOT, 'README.ru.md'), 'utf8').catch(() => null)
+  if (ru === null) throw new Error('README.ru.md is missing (Russian README required)')
+
+  for (const [label, body] of [['README.md', en], ['README.ru.md', ru]]) {
+    if (!body.includes('https://github.com/zarubinphil/Mnemazine.git')) {
+      throw new Error(`${label} clone URL is stale or missing`)
+    }
   }
-  if (!readme.includes('**English:**') || !readme.includes('**Русский:**')) {
-    throw new Error('README must include English and Russian descriptions')
+
+  // Each version links to the other so readers can switch languages.
+  if (!en.includes('README.ru.md')) throw new Error('README.md must link to README.ru.md')
+  if (!ru.includes('README.md')) throw new Error('README.ru.md must link back to README.md')
+
+  // Language sanity: English entry stays English-primary, Russian entry carries Cyrillic.
+  if (!/[A-Za-z]/.test(en)) throw new Error('README.md must contain English text')
+  if (!/[А-Яа-яЁё]/.test(ru)) throw new Error('README.ru.md must contain Russian text')
+
+  // Section parity (drift guard): both versions must expose the same H2 sections.
+  const h2 = body => (body.match(/^##\s+/gm) || []).length
+  if (h2(en) !== h2(ru)) {
+    throw new Error(`README section parity mismatch: README.md has ${h2(en)} H2, README.ru.md has ${h2(ru)}`)
   }
 }
 
