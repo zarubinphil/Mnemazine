@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
@@ -18,17 +18,22 @@ function hasFlag(name) {
 }
 
 const ROOT = path.resolve(process.cwd())
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(os.homedir(), 'Полезные знания')))
+const CONFIG_PATH = path.join(ROOT, 'config', 'graphify-refresh.json')
+const CONFIG = existsSync(CONFIG_PATH)
+  ? JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
+  : {}
+const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
 const MODE = arg('mode', 'auto')
-const BACKEND = arg('backend', 'ollama')
-const MODEL = arg('model', process.env.MNEMAZINE_GRAPHIFY_MODEL || 'qwen:32b')
-const MODEL_LADDER = (arg('models', process.env.MNEMAZINE_GRAPHIFY_MODELS || `${MODEL},gemma2:9b,qwen2.5-coder:7b`)
+const BACKEND = arg('backend', process.env.MNEMAZINE_GRAPHIFY_BACKEND || CONFIG.backend || 'ollama')
+const MODEL = arg('model', process.env.MNEMAZINE_GRAPHIFY_MODEL || CONFIG.model || 'qwen:32b')
+const CONFIG_MODELS = Array.isArray(CONFIG.models) ? CONFIG.models.join(',') : ''
+const MODEL_LADDER = (arg('models', process.env.MNEMAZINE_GRAPHIFY_MODELS || CONFIG_MODELS || `${MODEL},gemma2:9b,qwen2.5-coder:7b`)
   .split(',')
   .map(item => item.trim())
   .filter(Boolean))
-const TIMEOUT_MS = Number(arg('timeout-seconds', '900')) * 1000
-const SMOKE_TIMEOUT_MS = Number(arg('smoke-timeout-seconds', '120')) * 1000
-const SHRINK_THRESHOLD = Number(arg('shrink-threshold', '0.85'))
+const TIMEOUT_MS = Number(arg('timeout-seconds', String(CONFIG.timeout_seconds || '900'))) * 1000
+const SMOKE_TIMEOUT_MS = Number(arg('smoke-timeout-seconds', String(CONFIG.smoke_timeout_seconds || '120'))) * 1000
+const SHRINK_THRESHOLD = Number(arg('shrink-threshold', String(CONFIG.shrink_threshold || '0.85')))
 const JSON_OUT = hasFlag('json')
 const GRAPHIFY_OUT = path.join(VAULT, 'graphify-out')
 const GRAPH_PATH = path.join(GRAPHIFY_OUT, 'graph.json')
@@ -404,6 +409,7 @@ async function main() {
     ok: true,
     vault: VAULT,
     mode: MODE,
+    config_path: existsSync(CONFIG_PATH) ? CONFIG_PATH : null,
     backend: BACKEND,
     model: MODEL,
     model_ladder: unique(MODEL_LADDER),

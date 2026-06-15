@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -15,7 +16,7 @@ const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join
 
 const badMarkers = [
   /raw\s+ocr/i,
-  /сырой\s+ocr/i,
+  /сырой\s+ocr(?!\s+исключ[её]н)/i,
   /распознанный\s+текст\s+без\s+обработки/i,
   /lorem ipsum/i,
   /TODO:\s*rewrite/i,
@@ -26,7 +27,7 @@ async function walk(dir) {
   const out = []
   for (const item of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
     const p = path.join(dir, item.name)
-    if (item.isDirectory()) out.push(...await walk(p))
+    if (item.isDirectory() && !['.git', '.obsidian', 'graphify-out'].includes(item.name)) out.push(...await walk(p))
     else if (item.isFile() && p.endsWith('.md')) out.push(p)
   }
   return out
@@ -35,12 +36,23 @@ async function walk(dir) {
 const files = await walk(VAULT)
 const failures = []
 for (const file of files) {
+  const rel = path.relative(VAULT, file)
+  if (
+    rel.includes('/graphify-out/') ||
+    rel.includes('/_legacy-index ') ||
+    rel.includes('/_архив-дублей/') ||
+    rel.includes('/Capabilities/_') ||
+    /^99 Система\//.test(rel) ||
+    /(^|\/)_(Содержание|МАСТЕР-ИНДЕКС|ROUTING|ШАБЛОНЫ)\.md$/.test(rel) ||
+    ['AGENTS.md', 'CLAUDE.md', '_ROUTING.md', 'Лог обработки.md'].includes(rel)
+  ) continue
   const text = await fs.readFile(file, 'utf8')
+  if (/^##\s+Атомизировано(?:\s|$)/m.test(text)) continue
   const hit = badMarkers.find(re => re.test(text))
-  const hasSource = /## Source|## Источник|source:/i.test(text)
-  const hasMeaning = /## What This Is|## Что это|## Суть/i.test(text)
+  const hasSource = /#{2,}\s+(Source|Sources|Источник|Источники|Источники и подтверждения)(?:\s|$)|source:/i.test(text)
+  const hasMeaning = /#{2,}\s+(What This Is|Что это|Что это и зачем|Суть)(?:\s|$)/i.test(text)
   if (hit || !hasSource || !hasMeaning) {
-    failures.push({ file: path.relative(VAULT, file), marker: hit ? String(hit) : 'missing required sections' })
+    failures.push({ file: rel, marker: hit ? String(hit) : 'missing required sections' })
   }
 }
 

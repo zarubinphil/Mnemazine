@@ -183,12 +183,15 @@ Graphify turns the vault into a navigable relationship graph. Mnemazine uses it 
 For guarded local refreshes, use:
 
 ```bash
-npm run graph:refresh -- --vault "$HOME/Полезные знания" --mode auto
+export MNEMAZINE_VAULT="/path/to/your/vault"
+npm run graph:refresh -- --vault "$MNEMAZINE_VAULT" --mode auto
 ```
 
 This wrapper keeps `graph.json`, `GRAPH_REPORT.md`, backup/restore, and `needs_update` in sync instead of blindly trusting one heavy semantic run.
 
 For local Ollama semantic refreshes it also uses a guarded model ladder, rejecting models that fail a mini `graphify extract` smoke before they touch the real vault graph.
+
+Repo defaults live in `config/graphify-refresh.json`. Override them with CLI flags or `MNEMAZINE_GRAPHIFY_*` env vars when needed.
 
 ![Graphify map](docs/assets/hero/mnemazine-graphify.png)
 

@@ -1,0 +1,12 @@
+{
+  "backend": "ollama",
+  "model": "qwen:32b",
+  "models": [
+    "qwen:32b",
+    "gemma2:9b",
+    "qwen2.5-coder:7b"
+  ],
+  "timeout_seconds": 900,
+  "smoke_timeout_seconds": 120,
+  "shrink_threshold": 0.85
+}

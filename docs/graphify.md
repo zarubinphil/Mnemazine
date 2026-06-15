@@ -15,7 +15,8 @@ graphify update ~/Desktop/Mnemazine/vault
 Guarded refresh for Mnemazine nightly/repair runs:
 
 ```bash
-node scripts/mnemazine-refresh-graphify.mjs --vault "$HOME/Полезные знания" --mode auto --json
+export MNEMAZINE_VAULT="/path/to/your/vault"
+node scripts/mnemazine-refresh-graphify.mjs --vault "$MNEMAZINE_VAULT" --mode auto --json
 ```
 
 What helper does:
@@ -34,6 +35,14 @@ Exit codes:
 - `0` = graph fresh;
 - `2` = partial success, semantic refresh still pending;
 - `1` = hard failure.
+
+Defaults live in `config/graphify-refresh.json`.
+
+Smoke test:
+
+```bash
+npm run graph:smoke
+```
 
 Graphify helps Mnemazine:
 
