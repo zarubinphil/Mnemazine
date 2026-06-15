@@ -18,6 +18,12 @@ const badMarkers = [
   /raw\s+ocr/i,
   /сырой\s+ocr(?!\s+исключ[её]н)/i,
   /распознанный\s+текст\s+без\s+обработки/i,
+  /intake-draft/i,
+  /draft-local/i,
+  /локальное\s+извлечение/i,
+  /\btemp_image[_-]/i,
+  /\bIMG_\d+/,
+  /\.(WEBP|PNG|JPE?G|HEIC|TIFF)\b/,
   /lorem ipsum/i,
   /TODO:\s*rewrite/i,
   /скриншот\s+без\s+контекста/i
@@ -27,7 +33,11 @@ async function walk(dir) {
   const out = []
   for (const item of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
     const p = path.join(dir, item.name)
-    if (item.isDirectory() && !['.git', '.obsidian', 'graphify-out'].includes(item.name)) out.push(...await walk(p))
+    if (
+      item.isDirectory() &&
+      !['.git', '.obsidian'].includes(item.name) &&
+      !item.name.startsWith('graphify-out')
+    ) out.push(...await walk(p))
     else if (item.isFile() && p.endsWith('.md')) out.push(p)
   }
   return out

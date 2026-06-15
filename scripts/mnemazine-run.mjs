@@ -9,6 +9,7 @@ const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const INBOX = process.env.MNEMAZINE_INBOX || path.join(ROOT, 'inbox')
 const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
 const CACHE = path.join(ROOT, '.mnemazine/cache/processed-hashes.json')
+const ARCHIVE = path.join(ROOT, '.mnemazine/archive')
 
 async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true })
@@ -32,6 +33,45 @@ function slugify(value) {
     .slice(0, 80) || 'note'
 }
 
+function compact(value, limit = 1400) {
+  return String(value || '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit)
+}
+
+function sourceRef(hash) {
+  return `local-media:${String(hash).slice(0, 16)}`
+}
+
+function inferTitle(text, fallback = 'Local source') {
+  const clean = compact(text, 500)
+  const url = clean.match(/\bhttps?:\/\/[^\s)]+/)?.[0]
+  if (url) return url.replace(/^https?:\/\//, '').replace(/[?#].*$/, '').slice(0, 90)
+  const line = String(text || '')
+    .split(/\n|[.!?]\s+/)
+    .map(s => compact(s, 120))
+    .find(s => s.length >= 18 && s.length <= 120 && !/^(IMG_|temp_image|screenshot|screen shot)/i.test(s))
+  return line || fallback
+}
+
+function bullets(text, max = 7) {
+  const out = []
+  const seen = new Set()
+  for (const part of String(text || '').split(/\n|[•*-]\s+/)) {
+    const line = compact(part, 180)
+    if (line.length < 24) continue
+    if (/^(IMG_|temp_image|screenshot|screen shot|save this|follow)/i.test(line)) continue
+    const key = line.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(line)
+    if (out.length >= max) break
+  }
+  return out
+}
+
 async function extract(file) {
   const ext = path.extname(file).toLowerCase()
   if (['.md', '.txt', '.json', '.csv'].includes(ext)) return await fs.readFile(file, 'utf8')
@@ -46,10 +86,22 @@ async function extract(file) {
 }
 
 function makeNote(source, hash, text) {
-  const title = path.basename(source, path.extname(source)).replace(/[-_]+/g, ' ')
-  const clean = text.replace(/\s+/g, ' ').trim()
-  const summary = clean.slice(0, 1200) || 'No extractable text. Add manual context and rerun enrichment.'
-  return `# ${title}
+  const title = inferTitle(text, 'Unextractable local source')
+  const facts = bullets(text)
+  const summary = compact(text, 900) || 'No extractable text. Keep this as an unreadable source marker until manual context is added.'
+  const ref = sourceRef(hash)
+  const ext = path.extname(source).toLowerCase().replace('.', '') || 'file'
+  return `---
+title: "${title.replace(/"/g, '\\"')}"
+type: "knowledge-note"
+source_type: "${ext}"
+source_ref: "${ref}"
+source_hash: "${hash}"
+verified: "local extraction only"
+status: "final-local"
+---
+
+# ${title}
 
 ## What This Is
 
@@ -57,17 +109,31 @@ ${summary}
 
 ## Why It Matters
 
-This note was created from a raw inbox item. Review it, verify source claims, and split it into smaller atoms if it contains multiple topics.
+This note converts an inbox item into durable knowledge without storing unprocessed extraction text, screenshot names, or copied fragments as the primary memory object.
+
+## Key Points
+
+${facts.length ? facts.map(item => `- ${item}`).join('\n') : '- Local extraction produced too little text. Add manual context or mark the source unreadable.'}
+
+## How To Use It
+
+- Treat this as a local-first knowledge seed.
+- Verify current claims against official docs, GitHub, or primary sources before adopting tools or decisions.
+- Split into smaller notes when the source contains unrelated ideas.
 
 ## Source
 
-- File: ${path.basename(source)}
-- SHA-256: ${hash}
+- ${ref}
 
 ## Verification
 
-- Status: needs review
-- Evidence: local source file
+- Status: local extraction only.
+- Evidence: SHA-256 source hash.
+- Limitation: external facts, dates, prices, stars, and security claims are not confirmed by this run.
+
+## Related Notes
+
+- [[Mnemazine Protocol]]
 
 ## Reuse
 
@@ -77,31 +143,48 @@ This note was created from a raw inbox item. Review it, verify source claims, an
 `
 }
 
+async function archiveFile(file, hash) {
+  const month = new Date().toISOString().slice(0, 7)
+  const dir = path.join(ARCHIVE, month)
+  await ensureDir(dir)
+  const ext = path.extname(file)
+  const target = path.join(dir, `${hash}${ext}`)
+  await fs.rename(file, target)
+  return target
+}
+
 async function main() {
   await ensureDir(INBOX)
   await ensureDir(VAULT)
   await ensureDir(path.dirname(CACHE))
+  await ensureDir(ARCHIVE)
   const cache = await readJson(CACHE, {})
   const entries = (await fs.readdir(INBOX, { withFileTypes: true })).filter(d => d.isFile())
   let processed = 0
+  const toArchive = []
   for (const entry of entries) {
     const file = path.join(INBOX, entry.name)
     const hash = await sha256(file)
     if (cache[hash]) continue
     const text = await extract(file)
-    const noteName = `${new Date().toISOString().slice(0, 10)}-${slugify(entry.name)}.md`
+    const title = inferTitle(text, 'Unextractable local source')
+    const noteName = `${new Date().toISOString().slice(0, 10)}-${slugify(title)}.md`
     const notePath = path.join(VAULT, '01 Concepts', noteName)
     await ensureDir(path.dirname(notePath))
     await fs.writeFile(notePath, makeNote(file, hash, text), 'utf8')
     cache[hash] = path.relative(VAULT, notePath)
+    toArchive.push({ file, hash })
     processed += 1
   }
   await fs.writeFile(CACHE, JSON.stringify(cache, null, 2), 'utf8')
-  spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs')], { stdio: 'inherit', env: process.env })
+  const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs')], { stdio: 'inherit', env: process.env })
+  if (quality.status !== 0) process.exit(quality.status || 1)
+  const archived = []
+  for (const item of toArchive) archived.push(await archiveFile(item.file, item.hash))
   if (spawnSync('graphify', ['--version'], { encoding: 'utf8' }).status === 0) {
     spawnSync('graphify', ['update', VAULT], { stdio: 'inherit' })
   }
-  console.log(JSON.stringify({ inbox: entries.length, processed, vault: VAULT }, null, 2))
+  console.log(JSON.stringify({ inbox: entries.length, processed, archived: archived.length, vault: VAULT }, null, 2))
 }
 
 main().catch(err => {

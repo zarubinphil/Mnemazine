@@ -6,7 +6,11 @@
 
 **Mnemazine** is an open-source personal knowledge system inspired by **Mnemosyne**, the Greek goddess of memory. The name is intentionally brandable, while the idea is classical: memory is not a dump of files. Memory is formed when raw experience is recognized, checked, connected, rewritten, and made reusable.
 
-Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base.
+**English:** Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base. It extracts locally first, stores final notes only, keeps source hashes for provenance, updates a graph when available, and rejects raw OCR/draft dumps before they become memory.
+
+**Русский:** Mnemazine превращает скриншоты, PDF, веб-страницы, видео, заметки, гайды, GitHub-репозитории и случайные фрагменты в чистую Obsidian-совместимую базу знаний. Система сначала извлекает данные локально, хранит только финальные заметки, сохраняет хэши источников для проверяемости, обновляет граф при наличии Graphify и не пропускает сырой OCR/draft-мусор в память.
+
+> Memory, not a dump. Память, не свалка.
 
 ![Mnemazine — from raw fragments to an ordered knowledge graph](docs/assets/hero/mnemazine-pipeline.png)
 
@@ -24,6 +28,22 @@ It does not save raw OCR into your vault. It does not keep vague summaries that 
 - weekly HTML briefings with local state: `read`, `work on it`, `forget`.
 
 The goal is simple: future you should not reread twenty screenshots, a whole guide, or a messy transcript. Future you should open one good note and immediately understand what the knowledge is, why it matters, how to use it, and what evidence supports it.
+
+## Что это
+
+Mnemazine — локальная система переработки входящих материалов в долговечные знания.
+
+Она не кладёт в vault сырой OCR, случайные имена файлов, скриншоты без контекста и непроверяемые копипасты. Вместо этого создаёт финальные заметки:
+
+- понятный заголовок;
+- краткая суть;
+- зачем это важно;
+- как использовать;
+- source hash / `local-media:<hash>` вместо приватного имени файла;
+- статус проверки;
+- связи и повторное использование.
+
+Цель: будущий ты открывает не пачку скринов, а одну нормальную заметку, которую можно применить, проверить, связать с проектом или превратить в skill/agent/checklist.
 
 ## Why It Saves Tokens
 
@@ -45,7 +65,7 @@ In real workflows, this often turns huge source piles into compact reusable note
 Clone the project into the only folder you need:
 
 ```bash
-git clone https://github.com/7teenno1-art/Mnemazine.git "$HOME/Desktop/Mnemazine"
+git clone https://github.com/zarubinphil/Mnemazine.git "$HOME/Desktop/Mnemazine"
 cd "$HOME/Desktop/Mnemazine"
 bash install.sh
 ```
@@ -94,11 +114,36 @@ The run performs:
 1. file census;
 2. SHA-256 duplicate detection;
 3. local extraction when possible;
-4. topic splitting;
-5. source-aware note creation;
-6. vault quality gate;
-7. Graphify update when available;
-8. weekly HTML report update.
+4. final note creation with `source_ref` and `source_hash`;
+5. vault quality gate;
+6. archive move only after the quality gate passes;
+7. Graphify update when available.
+
+The default runner is intentionally conservative. It does not publish data, use private cookies, or send local files to external services. It writes local notes and archives processed source files under `.mnemazine/archive/`.
+
+## Локальный запуск
+
+Положите материалы в:
+
+```text
+~/Desktop/Mnemazine/inbox
+```
+
+Запустите:
+
+```bash
+node scripts/mnemazine-run.mjs
+```
+
+Прогон делает:
+
+1. перепись файлов;
+2. SHA-256 дедупликацию;
+3. локальное извлечение текста, если возможно;
+4. создание финальной заметки с `source_ref` и `source_hash`;
+5. gate качества vault;
+6. перенос исходников в `.mnemazine/archive/` только после зелёного gate;
+7. обновление Graphify, если он установлен.
 
 ## Website Ingestion
 
@@ -149,11 +194,27 @@ Every finished note should answer:
 
 Raw OCR, copied fragments, and messy transcripts are rejected by the quality gate.
 
+The quality gate also rejects common raw-intake residue such as `intake-draft`, `draft-local`, `temp_image_*`, `IMG_*.PNG`, and visible raw image extensions in note content. Graphify output folders and backups are excluded from this note-quality scan.
+
 Run the gate manually:
 
 ```bash
 node scripts/mnemazine-vault-quality-gate.mjs
 ```
+
+## Контракт качества
+
+Vault хранит финальное знание, не сырьё.
+
+Gate отклоняет:
+
+- сырой OCR;
+- `intake-draft` / `draft-local`;
+- видимые `temp_image_*`, `IMG_*.PNG`, `.WEBP`, `.PNG` внутри заметок;
+- заметки без смысла или источника;
+- копипасту без проверки.
+
+Graphify-артефакты и backup-папки не считаются knowledge notes и исключены из проверки.
 
 ## Agent Skills
 
