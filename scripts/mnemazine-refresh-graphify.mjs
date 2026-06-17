@@ -440,12 +440,12 @@ async function main() {
     if (MODE !== 'semantic' && semanticPending) await writeNeedsUpdate()
     result.after = await graphSummary(GRAPH_PATH)
     result.semantic_pending_after = existsSync(NEEDS_UPDATE_PATH)
-    result.ok = !result.semantic_pending_after
+    result.ok = MODE === 'code' ? true : !result.semantic_pending_after
     if (JSON_OUT) console.log(JSON.stringify(result, null, 2))
     else console.log(result.semantic_pending_after
       ? `Code graph refreshed. Semantic refresh still pending for ${rel(NEEDS_UPDATE_PATH)}.`
       : `Graph refreshed. Nodes=${result.after.nodes} edges=${result.after.edges} communities=${result.after.communities}.`)
-    process.exit(result.semantic_pending_after ? 2 : 0)
+    process.exit(MODE === 'code' || !result.semantic_pending_after ? 0 : 2)
   }
 
   result.semantic_refresh = await semanticRefresh({ baseline: afterCode })

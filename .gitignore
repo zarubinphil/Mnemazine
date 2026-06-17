@@ -7,7 +7,9 @@ __pycache__/
 .mnemazine/cache/
 .mnemazine/tmp/
 .mnemazine/bin/
-.mnemazine/state/*.lock
+.mnemazine/archive/
+.mnemazine/state/
+.mnemazine/reprocess-video-inbox/
 inbox/*
 !inbox/.gitkeep
 vault/*

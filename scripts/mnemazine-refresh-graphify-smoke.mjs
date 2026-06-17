@@ -46,7 +46,7 @@ await fs.writeFile(path.join(vault, 'sample.js'), 'export const answer = 42\n', 
 await fs.writeFile(path.join(vault, 'sample.md'), '# Sample\n\n## What This Is\n\nSmoke note.\n\n## Source\n\n- local\n', 'utf8')
 
 const codeRun = await runNode([HELPER, '--vault', vault, '--mode', 'code', '--json'], 180000)
-assert(codeRun.code === 2, `expected code mode exit 2 for pending semantic refresh, got ${codeRun.code}`)
+assert(codeRun.code === 0, `expected code mode exit 0 with pending semantic marker, got ${codeRun.code}`)
 const codeJson = JSON.parse(codeRun.stdout)
 assert(codeJson.code_refresh?.ok === true, 'code refresh should be ok in code mode')
 assert(codeJson.semantic_pending_after === true, 'code mode should leave semantic pending on docs corpus')
@@ -60,7 +60,7 @@ await fs.rm(tempRoot, { recursive: true, force: true })
 console.log(JSON.stringify({
   ok: true,
   checks: [
-    'code mode leaves semantic pending on docs corpus',
+    'code mode succeeds while leaving semantic pending on docs corpus',
     'semantic mode rejects unsupported backend cleanly'
   ]
 }, null, 2))
