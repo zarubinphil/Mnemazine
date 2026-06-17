@@ -382,6 +382,28 @@ async function realignReport() {
   }
 }
 
+async function mergeSemanticGraph(semanticGraphPath) {
+  const mergedPath = path.join(GRAPHIFY_OUT, 'merged-graph.json')
+  const result = await runCommand('graphify', ['merge-graphs', GRAPH_PATH, semanticGraphPath, '--out', mergedPath], { cwd: ROOT })
+  if (result.code !== 0 || result.timedOut || !existsSync(mergedPath)) {
+    return {
+      ok: false,
+      code: result.code,
+      timedOut: result.timedOut,
+      stdout_tail: truncate(result.stdout, 1200),
+      stderr_tail: truncate(result.stderr, 1200)
+    }
+  }
+  await fs.rename(mergedPath, GRAPH_PATH)
+  return {
+    ok: true,
+    code: result.code,
+    timedOut: result.timedOut,
+    stdout_tail: truncate(result.stdout, 1200),
+    stderr_tail: truncate(result.stderr, 1200)
+  }
+}
+
 async function semanticRefresh({ baseline }) {
   const backupDir = path.join(VAULT, `graphify-out-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)
   await copyDir(GRAPHIFY_OUT, backupDir)
@@ -410,18 +432,28 @@ async function semanticRefresh({ baseline }) {
         OLLAMA_API_KEY: process.env.OLLAMA_API_KEY || 'local'
       }
     : {}
-  const extract = await runCommand('graphify', graphifyExtractArgs(VAULT, BACKEND, chosenModel), {
+  const semanticOut = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-graphify-semantic-'))
+  const extract = await runCommand('graphify', [...graphifyExtractArgs(VAULT, BACKEND, chosenModel), '--out', semanticOut], {
     cwd: ROOT,
     env
   })
 
+  const semanticGraphPath = path.join(semanticOut, 'graphify-out', 'graph.json')
+  const semanticSummary = await graphSummary(semanticGraphPath).catch(() => ({ exists: false, nodes: 0, edges: 0, communities: 0, mtimeMs: 0 }))
+  const merge = extract.code === 0 && !extract.timedOut && semanticSummary.exists && semanticSummary.nodes > 0
+    ? await mergeSemanticGraph(semanticGraphPath)
+    : { ok: false, code: 1, timedOut: false, stdout_tail: '', stderr_tail: 'semantic graph missing after extract' }
   const summary = await graphSummary(GRAPH_PATH).catch(() => ({ exists: false, nodes: 0, edges: 0, communities: 0, mtimeMs: 0 }))
-  const reportRefresh = existsSync(GRAPH_PATH) ? await realignReport() : { ok: false, code: 1, timedOut: false, stdout_tail: '', stderr_tail: 'graph missing after extract' }
+  const reportRefresh = existsSync(GRAPH_PATH) && merge.ok ? await realignReport() : { ok: false, code: 1, timedOut: false, stdout_tail: '', stderr_tail: merge.stderr_tail || 'graph missing after merge' }
+  await removeIfExists(semanticOut)
 
   const invalidJson = /invalid JSON/i.test(`${extract.stdout}\n${extract.stderr}`)
   const severeShrink = baseline.nodes > 0 && summary.nodes < Math.floor(baseline.nodes * SHRINK_THRESHOLD)
   const success = extract.code === 0 &&
     !extract.timedOut &&
+    semanticSummary.exists &&
+    semanticSummary.nodes > 0 &&
+    merge.ok &&
     summary.exists &&
     summary.nodes > 0 &&
     summary.edges > 0 &&
@@ -445,6 +477,8 @@ async function semanticRefresh({ baseline }) {
       extract_timed_out: extract.timedOut,
       extract_stdout_tail: truncate(extract.stdout, 1800),
       extract_stderr_tail: truncate(extract.stderr, 1800),
+      semantic_graph: semanticSummary,
+      merge,
       attempted_graph: summary,
       baseline,
       report_refresh: reportRefresh
@@ -459,6 +493,8 @@ async function semanticRefresh({ baseline }) {
     backup_dir: backupDir,
     selected,
     chosen_model: chosenModel,
+    semantic_graph: semanticSummary,
+    merge,
     graph: summary,
     extract_stdout_tail: truncate(extract.stdout, 1800),
     extract_stderr_tail: truncate(extract.stderr, 1800),
