@@ -37,6 +37,7 @@ const MODEL_LADDER = (arg('models', process.env.MNEMAZINE_GRAPHIFY_MODELS || (BA
 const TIMEOUT_MS = Number(arg('timeout-seconds', String(CONFIG.timeout_seconds || '900'))) * 1000
 const SMOKE_TIMEOUT_MS = Number(arg('smoke-timeout-seconds', String(CONFIG.smoke_timeout_seconds || '120'))) * 1000
 const SHRINK_THRESHOLD = Number(arg('shrink-threshold', String(CONFIG.shrink_threshold || '0.85')))
+const MAX_CONCURRENCY = arg('max-concurrency', process.env.MNEMAZINE_GRAPHIFY_MAX_CONCURRENCY || String(CONFIG.max_concurrency || (BACKEND === 'kimi' ? '3' : '')))
 const JSON_OUT = hasFlag('json')
 const GRAPHIFY_OUT = path.join(VAULT, 'graphify-out')
 const GRAPH_PATH = path.join(GRAPHIFY_OUT, 'graph.json')
@@ -122,6 +123,14 @@ function stripCodeFence(text) {
   const value = String(text || '').trim()
   const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   return match ? match[1].trim() : value
+}
+
+function hasInvalidJsonWarning(text) {
+  return /invalid\s+JSON/i.test(String(text || ''))
+}
+
+function hasRateLimitWarning(text) {
+  return /rate[_ -]?limit|reached max organization concurrency|429/i.test(String(text || ''))
 }
 
 function runCommand(cmd, args, { env = {}, cwd = ROOT, timeoutMs = TIMEOUT_MS } = {}) {
@@ -256,7 +265,7 @@ Return stable JSON graph fragments for document notes.
   })
   const graphPath = path.join(tempRoot, 'graphify-out', 'graph.json')
   const summary = await graphSummary(graphPath).catch(() => ({ exists: false, nodes: 0, edges: 0, communities: 0, mtimeMs: 0 }))
-  const invalidJson = /invalid JSON/i.test(`${extract.stdout}\n${extract.stderr}`)
+  const invalidJson = hasInvalidJsonWarning(`${extract.stdout}\n${extract.stderr}`)
   await removeIfExists(tempRoot)
   if (extract.code !== 0 || extract.timedOut || invalidJson || !summary.exists || summary.nodes === 0) {
     return {
@@ -281,6 +290,18 @@ function graphifyExtractArgs(target, backend, model) {
   const args = ['extract', target, '--backend', backend]
   if (model) args.push('--model', model)
   return args
+}
+
+function graphifyExtractCommand(target, backend, model) {
+  const args = graphifyExtractArgs(target, backend, model)
+  if (MAX_CONCURRENCY) {
+    return {
+      command: 'python3',
+      args: [path.join(ROOT, 'scripts/graphify-extract-limited.py'), ...args],
+      env: { GRAPHIFY_LLM_MAX_CONCURRENCY: MAX_CONCURRENCY }
+    }
+  }
+  return { command: 'graphify', args, env: {} }
 }
 
 function apiKeyStatus(backend) {
@@ -310,13 +331,15 @@ Mnemazine must reject API/backend configs that cannot build a valid graph.
 
 - local smoke fixture
 `, 'utf8')
-  const extract = await runCommand('graphify', graphifyExtractArgs(tempRoot, backend, model), {
+  const command = graphifyExtractCommand(tempRoot, backend, model)
+  const extract = await runCommand(command.command, command.args, {
     cwd: ROOT,
+    env: command.env,
     timeoutMs: SMOKE_TIMEOUT_MS
   })
   const graphPath = path.join(tempRoot, 'graphify-out', 'graph.json')
   const summary = await graphSummary(graphPath).catch(() => ({ exists: false, nodes: 0, edges: 0, communities: 0, mtimeMs: 0 }))
-  const invalidJson = /invalid JSON/i.test(`${extract.stdout}\n${extract.stderr}`)
+  const invalidJson = hasInvalidJsonWarning(`${extract.stdout}\n${extract.stderr}`)
   await removeIfExists(tempRoot)
   if (extract.code !== 0 || extract.timedOut || invalidJson || !summary.exists || summary.nodes === 0) {
     return {
@@ -433,9 +456,10 @@ async function semanticRefresh({ baseline }) {
       }
     : {}
   const semanticOut = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-graphify-semantic-'))
-  const extract = await runCommand('graphify', [...graphifyExtractArgs(VAULT, BACKEND, chosenModel), '--out', semanticOut], {
+  const command = graphifyExtractCommand(VAULT, BACKEND, chosenModel)
+  const extract = await runCommand(command.command, [...command.args, '--out', semanticOut], {
     cwd: ROOT,
-    env
+    env: { ...env, ...command.env }
   })
 
   const semanticGraphPath = path.join(semanticOut, 'graphify-out', 'graph.json')
@@ -447,7 +471,9 @@ async function semanticRefresh({ baseline }) {
   const reportRefresh = existsSync(GRAPH_PATH) && merge.ok ? await realignReport() : { ok: false, code: 1, timedOut: false, stdout_tail: '', stderr_tail: merge.stderr_tail || 'graph missing after merge' }
   await removeIfExists(semanticOut)
 
-  const invalidJson = /invalid JSON/i.test(`${extract.stdout}\n${extract.stderr}`)
+  const combinedOutput = `${extract.stdout}\n${extract.stderr}`
+  const invalidJson = hasInvalidJsonWarning(combinedOutput)
+  const rateLimited = hasRateLimitWarning(combinedOutput)
   const severeShrink = baseline.nodes > 0 && summary.nodes < Math.floor(baseline.nodes * SHRINK_THRESHOLD)
   const success = extract.code === 0 &&
     !extract.timedOut &&
@@ -458,6 +484,7 @@ async function semanticRefresh({ baseline }) {
     summary.nodes > 0 &&
     summary.edges > 0 &&
     !invalidJson &&
+    !rateLimited &&
     !severeShrink &&
     reportRefresh.ok
 
@@ -469,7 +496,7 @@ async function semanticRefresh({ baseline }) {
     await writeNeedsUpdate()
     return {
       ok: false,
-      status: extract.timedOut ? 'timeout' : invalidJson ? 'invalid_json' : severeShrink ? 'unsafe_shrink' : 'extract_failed',
+      status: extract.timedOut ? 'timeout' : invalidJson ? 'invalid_json' : rateLimited ? 'rate_limited_partial' : severeShrink ? 'unsafe_shrink' : 'extract_failed',
       backup_dir: backupDir,
       selected,
       chosen_model: chosenModel,
@@ -479,6 +506,7 @@ async function semanticRefresh({ baseline }) {
       extract_stderr_tail: truncate(extract.stderr, 1800),
       semantic_graph: semanticSummary,
       merge,
+      rate_limited: rateLimited,
       attempted_graph: summary,
       baseline,
       report_refresh: reportRefresh
@@ -495,6 +523,7 @@ async function semanticRefresh({ baseline }) {
     chosen_model: chosenModel,
     semantic_graph: semanticSummary,
     merge,
+    rate_limited: rateLimited,
     graph: summary,
     extract_stdout_tail: truncate(extract.stdout, 1800),
     extract_stderr_tail: truncate(extract.stderr, 1800),
@@ -519,6 +548,7 @@ async function main() {
     model: MODEL,
     model_ladder: unique(MODEL_LADDER),
     api_key_env: API_KEY_ENV_BY_BACKEND[BACKEND] || null,
+    max_concurrency: MAX_CONCURRENCY || null,
     ollama_base_url: BACKEND === 'ollama' ? OLLAMA_BASE_URL : null,
     before: initialBefore,
     code_refresh: null,

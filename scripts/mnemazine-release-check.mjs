@@ -59,6 +59,9 @@ async function checkSyntax() {
   for (const script of scripts) {
     if (existsSync(path.join(ROOT, script))) await must(`syntax:${script}`, process.execPath, ['--check', script])
   }
+  if (existsSync(path.join(ROOT, 'scripts/graphify-extract-limited.py'))) {
+    await must('syntax:scripts/graphify-extract-limited.py', 'python3', ['-m', 'py_compile', 'scripts/graphify-extract-limited.py'])
+  }
 }
 
 async function demoSmoke() {
