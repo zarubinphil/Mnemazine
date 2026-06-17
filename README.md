@@ -3,20 +3,26 @@
 🇬🇧 **English** · [🇷🇺 Русский](README.ru.md)
 
 <p align="center">
-  <img src="docs/assets/hero/mnemazine-hero.png" width="760" alt="Mnemazine — Mnemosyne, goddess of memory, weaving raw fragments into a living knowledge graph">
+  <img src="docs/assets/hero/mnemazine-hero.png" width="820" alt="Mnemazine — Mnemosyne, goddess of memory, beside her marble column, distilling raw fragments into a layered knowledge system">
 </p>
 
-**Mnemazine** is an open-source personal knowledge system inspired by **Mnemosyne**, the Greek goddess of memory. The name is intentionally brandable, while the idea is classical: memory is not a dump of files. Memory is formed when raw experience is recognized, checked, connected, rewritten, and made reusable.
+**Mnemazine** is an open-source personal memory system, named after **Mnemosyne**, the Greek goddess of memory and mother of the Muses.
 
-Mnemazine turns screenshots, PDFs, web pages, videos, notes, guides, GitHub repositories, and random fragments into a clean Obsidian-compatible knowledge base. It extracts locally first, stores final notes only, keeps source hashes for provenance, updates a graph when available, and rejects raw OCR/draft dumps before they become memory.
+The idea behind it is simple. Most people pile up notes, screenshots, and saved links and never look at them again. A pile is not memory. Real memory is what happens when you take something raw, understand it, check it, connect it to what you already know, and write down only the part worth keeping. Mnemazine does that part for you at the moment of saving.
+
+The technique has a name — **synthesis on write** — popularized by [Andrej Karpathy](https://karpathy.ai/): don't dump and hope to read it later; distill the essence as you capture it, so the note is already useful the next time you open it.
+
+In practice, Mnemazine takes screenshots, PDFs, web pages, YouTube videos, notes, guides, and GitHub repositories and turns them into a clean, [Obsidian](https://obsidian.md/)-compatible knowledge base. It extracts text locally first, keeps a source hash so you always know where a fact came from, stores only finished notes, links them into a graph, and refuses to let raw OCR or messy drafts leak into your vault.
 
 > Memory, not a dump.
 
-![Mnemazine — from raw fragments to an ordered knowledge graph](docs/assets/hero/mnemazine-pipeline.png)
+<p align="center">
+  <img src="docs/assets/hero/mnemazine-synthesis.png" width="760" alt="Synthesis on write: many raw fragments are squeezed through to a single durable note">
+</p>
 
 ## What It Is
 
-Mnemazine is a local-first knowledge refinery.
+Mnemazine is a local-first knowledge refinery. Material goes in raw; finished knowledge comes out.
 
 It does not save raw OCR into your vault. It does not keep vague summaries that are impossible to reuse. It tries to produce finished knowledge:
 
@@ -31,7 +37,11 @@ The goal is simple: future you should not reread twenty screenshots, a whole gui
 
 ## Why It Saves Tokens
 
-Mnemazine saves tokens by moving work out of repeated LLM context and into durable local structure.
+Mnemazine saves tokens by moving work out of repeated LLM context and into durable local structure: parse locally, cache aggressively, store refined atoms, retrieve narrowly.
+
+<p align="center">
+  <img src="docs/assets/hero/mnemazine-token.png" width="760" alt="Token economics: parse locally, hash cache, store atoms, retrieve narrowly">
+</p>
 
 Typical savings come from:
 
@@ -125,8 +135,6 @@ The parser looks for:
 
 It does not use private cookies or browser sessions by default. If a site needs authentication, export the data yourself and place it in `inbox/`.
 
-![Site ingestion](docs/assets/hero/mnemazine-site.png)
-
 ## YouTube Ingestion
 
 Mnemazine can ingest a YouTube channel and turn every video into a transcript note, then keep pulling new uploads automatically:
@@ -200,8 +208,6 @@ For local Ollama semantic refreshes it also uses a guarded model ladder, rejecti
 
 Repo defaults live in `config/graphify-refresh.json`. Override them with CLI flags or `MNEMAZINE_GRAPHIFY_*` env vars when needed.
 
-![Graphify map](docs/assets/hero/mnemazine-graphify.png)
-
 ## Weekly HTML Brief
 
 The weekly report is a local HTML presentation in Russian by default. It is meant to be pleasant to read, not a raw log.
@@ -218,8 +224,6 @@ State is stored in:
 ~/Desktop/Mnemazine/.mnemazine/state/weekly-state.json
 ```
 
-![Weekly HTML report](docs/assets/hero/mnemazine-weekly.png)
-
 ## Repository Philosophy
 
 Mnemazine is not a second brain as a storage slogan. It is a memory system as a pipeline:
@@ -227,6 +231,10 @@ Mnemazine is not a second brain as a storage slogan. It is a memory system as a 
 ```text
 raw input -> extraction -> understanding -> research -> verification -> atomization -> vault -> graph -> reuse
 ```
+
+<p align="center">
+  <img src="docs/assets/hero/mnemazine-pipeline.png" width="820" alt="The Mnemazine pipeline: raw input, extract, verify, synthesize, vault, graph, reuse">
+</p>
 
 That matters because a real memory must be reproducible. A note should be able to become:
 
