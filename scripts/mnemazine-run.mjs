@@ -9,17 +9,20 @@ const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const INBOX = process.env.MNEMAZINE_INBOX || path.join(ROOT, 'inbox')
 const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
 const REPORTS = process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')
-const CACHE = path.join(ROOT, '.mnemazine/cache/processed-hashes.json')
-const ARCHIVE = path.join(ROOT, '.mnemazine/archive')
+const CACHE = process.env.MNEMAZINE_CACHE || path.join(ROOT, '.mnemazine/cache/processed-hashes.json')
+const ARCHIVE = process.env.MNEMAZINE_ARCHIVE || path.join(ROOT, '.mnemazine/archive')
 const TRANSCRIPTS = path.join(ROOT, '.mnemazine/cache/video-transcripts')
 const VIDEO_AUDIO = path.join(ROOT, '.mnemazine/cache/video-audio')
 const VIDEO_FRAMES = path.join(ROOT, '.mnemazine/cache/video-frames')
 const VIDEO_QUEUE = path.join(ROOT, '.mnemazine/cache/video-queue.jsonl')
-const EXTRACTS = path.join(ROOT, '.mnemazine/cache/extracted')
+const EXTRACTS = process.env.MNEMAZINE_EXTRACTS || path.join(ROOT, '.mnemazine/cache/extracted')
+const SYNTHESIZE = process.env.MNEMAZINE_SYNTHESIZE !== '0'
 const WHISPER_MODEL = process.env.MNEMAZINE_WHISPER_MODEL || ''
 const WHISPER_LANGUAGE = process.env.MNEMAZINE_WHISPER_LANGUAGE || 'ru'
 const VIDEO_FRAME_LIMIT = Number(process.env.MNEMAZINE_VIDEO_FRAME_LIMIT || '8')
 const VIDEO_INLINE_MAX_SECONDS = Number(process.env.MNEMAZINE_VIDEO_INLINE_MAX_SECONDS || '180')
+const COMMAND_TIMEOUT_MS = Number(process.env.MNEMAZINE_COMMAND_TIMEOUT_MS || '120000')
+const PROGRESS_EVERY = Number(process.env.MNEMAZINE_PROGRESS_EVERY || '25')
 
 async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true })
@@ -94,8 +97,16 @@ function isVideo(file) {
   return ['.mp4', '.mov', '.m4v', '.webm', '.mkv'].includes(path.extname(file).toLowerCase())
 }
 
+function isImage(file) {
+  return ['.png', '.jpg', '.jpeg', '.heic', '.webp', '.tiff'].includes(path.extname(file).toLowerCase())
+}
+
+function isMarkitdownDocument(file) {
+  return ['.pdf', '.docx', '.pptx', '.xlsx', '.html', '.htm'].includes(path.extname(file).toLowerCase())
+}
+
 function videoDurationSeconds(file) {
-  const probe = spawnSync('ffmpeg', ['-i', file], { encoding: 'utf8' })
+  const probe = spawnSync('ffmpeg', ['-i', file], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
   const match = `${probe.stderr}\n${probe.stdout}`.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
   if (!match) return null
   return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
@@ -147,7 +158,7 @@ async function extractVideo(file, hash) {
     '-ar', '16000',
     '-f', 'wav',
     audioPath
-  ], { encoding: 'utf8' })
+  ], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
   if (ffmpeg.status !== 0 || !existsSync(audioPath)) return ''
 
   const whisper = spawnSync('whisper', [
@@ -158,7 +169,7 @@ async function extractVideo(file, hash) {
     '--output_format', 'txt',
     '--fp16', 'False',
     '--verbose', 'False'
-  ], { encoding: 'utf8' })
+  ], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
   const whisperOut = path.join(TRANSCRIPTS, `${hash}.txt`)
   let transcript = ''
   if (whisper.status === 0 && existsSync(whisperOut)) {
@@ -181,7 +192,7 @@ async function extractVideoFrames(file, hash) {
       '-vf', 'fps=1/3',
       '-frames:v', String(VIDEO_FRAME_LIMIT),
       path.join(frameDir, 'frame-%03d.png')
-    ], { encoding: 'utf8' })
+    ], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
   }
   const chunks = []
   const seen = new Set()
@@ -190,7 +201,7 @@ async function extractVideoFrames(file, hash) {
     .sort()
     .slice(0, VIDEO_FRAME_LIMIT)
   for (const frame of frames) {
-    const out = spawnSync(ocr, [path.join(frameDir, frame)], { encoding: 'utf8' })
+    const out = spawnSync(ocr, [path.join(frameDir, frame)], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
     if (out.status !== 0) continue
     for (const line of out.stdout.split(/\r?\n/)) {
       const clean = compact(line, 220)
@@ -215,72 +226,16 @@ async function extract(file) {
   const ext = path.extname(file).toLowerCase()
   if (['.md', '.txt', '.json', '.csv'].includes(ext)) return await fs.readFile(file, 'utf8')
   if (isVideo(file)) return await extractVideo(file, await sha256(file))
-  const markitdown = spawnSync('markitdown', [file], { encoding: 'utf8' })
-  if (markitdown.status === 0 && markitdown.stdout.trim()) return markitdown.stdout
   const ocr = path.join(ROOT, '.mnemazine/bin/vision-ocr')
-  if (existsSync(ocr) && ['.png', '.jpg', '.jpeg', '.heic', '.webp', '.tiff'].includes(ext)) {
-    const out = spawnSync(ocr, [file], { encoding: 'utf8' })
+  if (existsSync(ocr) && isImage(file)) {
+    const out = spawnSync(ocr, [file], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
     if (out.status === 0) return out.stdout
   }
+  if (isMarkitdownDocument(file)) {
+    const markitdown = spawnSync('markitdown', [file], { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS })
+    if (markitdown.status === 0 && markitdown.stdout.trim()) return markitdown.stdout
+  }
   return ''
-}
-
-function makeNote(source, hash, text) {
-  const title = inferTitle(text, 'Unextractable local source')
-  const facts = bullets(text)
-  const summary = compact(text, 900) || 'No extractable text. Keep this as an unreadable source marker until manual context is added.'
-  const ref = sourceRef(hash)
-  const ext = path.extname(source).toLowerCase().replace('.', '') || 'file'
-  return `---
-title: "${title.replace(/"/g, '\\"')}"
-type: "knowledge-note"
-source_type: "${ext}"
-source_ref: "${ref}"
-source_hash: "${hash}"
-verified: "extraction reviewed; external verification required"
-status: "candidate"
----
-
-# ${title}
-
-## What This Is
-
-${summary}
-
-## Why It Matters
-
-This note converts an inbox item into durable knowledge without storing unprocessed extraction text, screenshot names, or copied fragments as the primary memory object.
-
-## Key Points
-
-${facts.length ? facts.map(item => `- ${item}`).join('\n') : '- Local extraction produced too little text. Add manual context or mark the source unreadable.'}
-
-## How To Use It
-
-- Treat this as a local-first knowledge seed.
-- Verify current claims against official docs, GitHub, or primary sources before adopting tools or decisions.
-- Split into smaller notes when the source contains unrelated ideas.
-
-## Source
-
-- ${ref}
-
-## Verification
-
-- Status: extraction reviewed; external verification required.
-- Evidence: SHA-256 source hash.
-- Limitation: external facts, dates, prices, stars, and security claims are not confirmed by this run.
-
-## Related Notes
-
-- [[Mnemazine Protocol]]
-
-## Reuse
-
-- Turn stable procedures into skills.
-- Turn repeated decisions into checklists.
-- Link related notes after Graphify update.
-`
 }
 
 async function writeExtractCache(source, hash, text, status) {
@@ -322,7 +277,7 @@ async function main() {
   let processed = 0
   let cachedOnly = 0
   const toArchive = []
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const file = path.join(INBOX, entry.name)
     const hash = await sha256(file)
     if (cache[hash]) continue
@@ -332,19 +287,24 @@ async function main() {
       cache[hash] = { status: record.status, source_ref: record.source_ref, cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
       toArchive.push({ file, hash })
       cachedOnly += 1
+      if (PROGRESS_EVERY > 0 && (index + 1) % PROGRESS_EVERY === 0) {
+        console.error(JSON.stringify({ progress: index + 1, total: entries.length, processed, cached_only: cachedOnly }))
+      }
       continue
     }
     await writeExtractCache(file, hash, text, 'extracted_for_note')
-    const title = inferTitle(text, 'Unextractable local source')
-    const noteName = `${new Date().toISOString().slice(0, 10)}-${slugify(title)}-${hash.slice(0, 12)}.md`
-    const notePath = path.join(VAULT, '01 Concepts', noteName)
-    await ensureDir(path.dirname(notePath))
-    await fs.writeFile(notePath, makeNote(file, hash, text), 'utf8')
-    cache[hash] = path.relative(VAULT, notePath)
+    cache[hash] = { status: 'extracted_for_note', source_ref: sourceRef(hash), cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
     toArchive.push({ file, hash })
     processed += 1
+    if (PROGRESS_EVERY > 0 && (index + 1) % PROGRESS_EVERY === 0) {
+      console.error(JSON.stringify({ progress: index + 1, total: entries.length, processed, cached_only: cachedOnly }))
+    }
   }
   await fs.writeFile(CACHE, JSON.stringify(cache, null, 2), 'utf8')
+  if (SYNTHESIZE) {
+    const synth = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-synthesize.mjs')], { stdio: 'inherit', env: process.env })
+    if (synth.status !== 0) process.exit(synth.status || 1)
+  }
   const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs')], { stdio: 'inherit', env: process.env })
   if (quality.status !== 0) process.exit(quality.status || 1)
   const archived = []

@@ -10,6 +10,7 @@
     "graph:refresh": "node scripts/mnemazine-refresh-graphify.mjs --json",
     "graph:smoke": "node scripts/mnemazine-refresh-graphify-smoke.mjs",
     "ingest:site": "node scripts/mnemazine-ingest-site.mjs",
+    "synthesize": "node scripts/mnemazine-synthesize.mjs",
     "weekly": "node scripts/mnemazine-weekly-brief-html.mjs",
     "quality": "node scripts/mnemazine-vault-quality-gate.mjs",
     "report:quality": "node scripts/mnemazine-report-quality-gate.mjs",

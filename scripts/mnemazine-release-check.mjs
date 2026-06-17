@@ -51,6 +51,7 @@ async function checkSyntax() {
     'scripts/mnemazine-vault-quality-gate.mjs',
     'scripts/mnemazine-refresh-graphify.mjs',
     'scripts/mnemazine-refresh-graphify-smoke.mjs',
+    'scripts/mnemazine-synthesize.mjs',
     'scripts/mnemazine-weekly-brief-html.mjs',
     'scripts/mnemazine-report-quality-gate.mjs',
     'scripts/mnemazine-release-check.mjs'
@@ -71,6 +72,7 @@ async function demoSmoke() {
   await fs.copyFile(path.join(ROOT, 'demo/inbox/example-guide.md'), path.join(inbox, 'example-guide.md'))
   await fs.writeFile(path.join(inbox, 'empty-source.bin'), '')
   await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs'), path.join(scripts, 'mnemazine-vault-quality-gate.mjs'))
+  await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-synthesize.mjs'), path.join(scripts, 'mnemazine-synthesize.mjs'))
 
   await must('demo intake smoke', process.execPath, ['scripts/mnemazine-run.mjs'], {
     env: {
@@ -86,13 +88,15 @@ async function demoSmoke() {
   const notes = (await listFiles(vault))
     .filter(file => file.endsWith('.md'))
     .filter(file => !file.split(path.sep).includes('graphify-out'))
-  if (notes.length !== 1) throw new Error(`demo smoke failed: expected 1 note, got ${notes.length}`)
-  const note = await fs.readFile(notes[0], 'utf8')
-  const forbidden = [/intake-draft/i, /draft-local/i, /\btemp_image/i, /\bIMG_\d+/, /\.(WEBP|PNG|JPE?G|HEIC|TIFF)\b/]
-  const hit = forbidden.find(re => re.test(note))
-  if (hit) throw new Error(`demo smoke failed: raw marker in note (${hit})`)
-  if (!/type:\s*"knowledge-note"/.test(note)) throw new Error('demo smoke failed: note is not knowledge-note')
-  if (!/source_hash:/.test(note) || !/local-media:/.test(note)) throw new Error('demo smoke failed: provenance missing')
+  if (notes.length < 1) throw new Error(`demo smoke failed: expected synthesized notes, got ${notes.length}`)
+  const forbidden = [/intake-draft/i, /draft-local/i, /\btemp_image/i, /\bIMG_\d+/, /\.(WEBP|PNG|JPE?G|HEIC|TIFF)\b/, /status:\s*"candidate"/i, /local extraction only/i]
+  for (const noteFile of notes) {
+    const note = await fs.readFile(noteFile, 'utf8')
+    const hit = forbidden.find(re => re.test(note))
+    if (hit) throw new Error(`demo smoke failed: raw marker in ${path.basename(noteFile)} (${hit})`)
+    if (!/type:\s*"knowledge-note"/.test(note)) throw new Error(`demo smoke failed: ${path.basename(noteFile)} is not knowledge-note`)
+    if (!/source_ref:\s*"session:/.test(note) || !/local-media:/.test(note)) throw new Error(`demo smoke failed: ${path.basename(noteFile)} synthesis provenance missing`)
+  }
 
   const archived = await listFiles(path.join(temp, '.mnemazine/archive'))
   if (archived.length !== 2) throw new Error(`demo smoke failed: expected 2 archived sources, got ${archived.length}`)
