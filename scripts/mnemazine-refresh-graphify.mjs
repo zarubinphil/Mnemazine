@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
+import { graphStats as normalizedGraphStats, mergeGraphObjects, readGraph, writeGraph } from './mnemazine-graph-utils.mjs'
 
 const argv = process.argv.slice(2)
 
@@ -38,7 +39,7 @@ const TIMEOUT_MS = Number(arg('timeout-seconds', String(CONFIG.timeout_seconds |
 const SMOKE_TIMEOUT_MS = Number(arg('smoke-timeout-seconds', String(CONFIG.smoke_timeout_seconds || '120'))) * 1000
 const SHRINK_THRESHOLD = Number(arg('shrink-threshold', String(CONFIG.shrink_threshold || '0.85')))
 const MAX_CONCURRENCY = arg('max-concurrency', process.env.MNEMAZINE_GRAPHIFY_MAX_CONCURRENCY || String(CONFIG.max_concurrency || (BACKEND === 'kimi' ? '3' : '')))
-const ALLOW_PARTIAL_SEMANTIC = arg('allow-partial-semantic', process.env.MNEMAZINE_GRAPHIFY_ALLOW_PARTIAL || '1') !== '0'
+const ALLOW_PARTIAL_SEMANTIC = arg('allow-partial-semantic', process.env.MNEMAZINE_GRAPHIFY_ALLOW_PARTIAL || String(CONFIG.allow_partial_semantic ? 1 : 0)) !== '0'
 const JSON_OUT = hasFlag('json')
 const GRAPHIFY_OUT = path.join(VAULT, 'graphify-out')
 const GRAPH_PATH = path.join(GRAPHIFY_OUT, 'graph.json')
@@ -407,24 +408,18 @@ async function realignReport() {
 }
 
 async function mergeSemanticGraph(semanticGraphPath) {
-  const mergedPath = path.join(GRAPHIFY_OUT, 'merged-graph.json')
-  const result = await runCommand('graphify', ['merge-graphs', GRAPH_PATH, semanticGraphPath, '--out', mergedPath], { cwd: ROOT })
-  if (result.code !== 0 || result.timedOut || !existsSync(mergedPath)) {
-    return {
-      ok: false,
-      code: result.code,
-      timedOut: result.timedOut,
-      stdout_tail: truncate(result.stdout, 1200),
-      stderr_tail: truncate(result.stderr, 1200)
-    }
-  }
-  await fs.rename(mergedPath, GRAPH_PATH)
+  const before = await readGraph(GRAPH_PATH)
+  const semantic = await readGraph(semanticGraphPath)
+  const merged = mergeGraphObjects(before, semantic)
+  await writeGraph(GRAPH_PATH, merged.graph)
   return {
     ok: true,
-    code: result.code,
-    timedOut: result.timedOut,
-    stdout_tail: truncate(result.stdout, 1200),
-    stderr_tail: truncate(result.stderr, 1200)
+    code: 0,
+    timedOut: false,
+    stats: merged.stats,
+    graph: normalizedGraphStats(merged.graph),
+    stdout_tail: '',
+    stderr_tail: ''
   }
 }
 
