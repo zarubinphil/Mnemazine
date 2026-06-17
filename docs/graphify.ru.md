@@ -40,6 +40,18 @@ node scripts/mnemazine-refresh-graphify.mjs --vault "$MNEMAZINE_VAULT" --mode au
 
 Дефолты лежат в `config/graphify-refresh.json`.
 
+Семантическая экстракция через отдельный API:
+
+```bash
+OPENAI_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend openai --model gpt-4.1-mini --mode semantic --json
+ANTHROPIC_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend claude --mode semantic --json
+GEMINI_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend gemini --mode semantic --json
+```
+
+Ключи не коммитить. Wrapper проверяет нужную переменную окружения, запускает
+мини-smoke `graphify extract`, делает бэкап `graphify-out/` и восстанавливает
+его, если semantic extraction падает или небезопасно уменьшает граф.
+
 Смоук-тест:
 
 ```bash

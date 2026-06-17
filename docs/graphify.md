@@ -40,6 +40,18 @@ Exit codes:
 
 Defaults live in `config/graphify-refresh.json`.
 
+API-backed semantic extraction:
+
+```bash
+OPENAI_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend openai --model gpt-4.1-mini --mode semantic --json
+ANTHROPIC_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend claude --mode semantic --json
+GEMINI_API_KEY=... node scripts/mnemazine-refresh-graphify.mjs --backend gemini --mode semantic --json
+```
+
+Do not commit API keys. The wrapper checks the required environment variable,
+runs a mini `graphify extract` smoke test, backs up `graphify-out/`, and restores
+the backup if semantic extraction fails or shrinks the graph unsafely.
+
 Smoke test:
 
 ```bash

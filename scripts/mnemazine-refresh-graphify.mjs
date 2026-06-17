@@ -25,9 +25,12 @@ const CONFIG = existsSync(CONFIG_PATH)
 const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
 const MODE = arg('mode', 'auto')
 const BACKEND = arg('backend', process.env.MNEMAZINE_GRAPHIFY_BACKEND || CONFIG.backend || 'ollama')
-const MODEL = arg('model', process.env.MNEMAZINE_GRAPHIFY_MODEL || CONFIG.model || 'qwen:32b')
+const CONFIG_BACKEND = CONFIG.backend || 'ollama'
+const CONFIG_MODEL = BACKEND === CONFIG_BACKEND ? CONFIG.model : ''
+const MODEL = arg('model', process.env.MNEMAZINE_GRAPHIFY_MODEL || CONFIG_MODEL || '')
 const CONFIG_MODELS = Array.isArray(CONFIG.models) ? CONFIG.models.join(',') : ''
-const MODEL_LADDER = (arg('models', process.env.MNEMAZINE_GRAPHIFY_MODELS || CONFIG_MODELS || `${MODEL},gemma2:9b,qwen2.5-coder:7b`)
+const DEFAULT_OLLAMA_LADDER = MODEL ? `${MODEL},gemma2:9b,qwen2.5-coder:7b` : 'qwen:32b,gemma2:9b,qwen2.5-coder:7b'
+const MODEL_LADDER = (arg('models', process.env.MNEMAZINE_GRAPHIFY_MODELS || (BACKEND === CONFIG_BACKEND ? CONFIG_MODELS : '') || (BACKEND === 'ollama' ? DEFAULT_OLLAMA_LADDER : MODEL))
   .split(',')
   .map(item => item.trim())
   .filter(Boolean))
@@ -49,6 +52,12 @@ function normalizeOllamaBaseUrl(value) {
 }
 
 const OLLAMA_BASE_URL = normalizeOllamaBaseUrl(arg('ollama-url', ''))
+const API_KEY_ENV_BY_BACKEND = {
+  openai: ['OPENAI_API_KEY'],
+  claude: ['ANTHROPIC_API_KEY'],
+  gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+  kimi: ['KIMI_API_KEY', 'MOONSHOT_API_KEY']
+}
 
 function rel(file) {
   return path.relative(VAULT, file) || '.'
@@ -268,7 +277,75 @@ Return stable JSON graph fragments for document notes.
   }
 }
 
+function graphifyExtractArgs(target, backend, model) {
+  const args = ['extract', target, '--backend', backend]
+  if (model) args.push('--model', model)
+  return args
+}
+
+function apiKeyStatus(backend) {
+  if (backend === 'ollama') return { ok: true, required_env: [] }
+  const required = API_KEY_ENV_BY_BACKEND[backend]
+  if (!required) return { ok: false, required_env: [], reason: `unsupported backend ${backend}` }
+  const found = required.find(name => Boolean(process.env[name]))
+  return found
+    ? { ok: true, required_env: required, found_env: found }
+    : { ok: false, required_env: required, reason: `set one of: ${required.join(', ')}` }
+}
+
+async function graphifyBackendMiniSmoke(backend, model) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-graphify-smoke-'))
+  const notePath = path.join(tempRoot, 'smoke.md')
+  await fs.writeFile(notePath, `# Graphify API Smoke
+
+## What This Is
+
+Semantic extraction smoke for Graphify backend ${backend}.
+
+## Why It Matters
+
+Mnemazine must reject API/backend configs that cannot build a valid graph.
+
+## Source
+
+- local smoke fixture
+`, 'utf8')
+  const extract = await runCommand('graphify', graphifyExtractArgs(tempRoot, backend, model), {
+    cwd: ROOT,
+    timeoutMs: SMOKE_TIMEOUT_MS
+  })
+  const graphPath = path.join(tempRoot, 'graphify-out', 'graph.json')
+  const summary = await graphSummary(graphPath).catch(() => ({ exists: false, nodes: 0, edges: 0, communities: 0, mtimeMs: 0 }))
+  const invalidJson = /invalid JSON/i.test(`${extract.stdout}\n${extract.stderr}`)
+  await removeIfExists(tempRoot)
+  if (extract.code !== 0 || extract.timedOut || invalidJson || !summary.exists || summary.nodes === 0) {
+    return {
+      ok: false,
+      reason: extract.timedOut ? 'mini_extract_timeout' : invalidJson ? 'mini_extract_invalid_json' : 'mini_extract_failed',
+      extract_code: extract.code,
+      extract_timed_out: extract.timedOut,
+      stdout_tail: truncate(extract.stdout, 600),
+      stderr_tail: truncate(extract.stderr, 600),
+      graph: summary
+    }
+  }
+  return {
+    ok: true,
+    graph: summary,
+    stdout_tail: truncate(extract.stdout, 600),
+    stderr_tail: truncate(extract.stderr, 600)
+  }
+}
+
 async function pickSemanticModel() {
+  if (BACKEND !== 'ollama') {
+    const key = apiKeyStatus(BACKEND)
+    if (!key.ok) return { ok: false, status: key.required_env.length ? 'missing_api_key' : 'unsupported_backend', key }
+    const mini = await graphifyBackendMiniSmoke(BACKEND, MODEL)
+    return mini.ok
+      ? { ok: true, model: MODEL || null, attempts: [{ backend: BACKEND, model: MODEL || null, key_env: key.found_env, mini, ok: true }] }
+      : { ok: false, status: 'smoke_failed', attempts: [{ backend: BACKEND, model: MODEL || null, key_env: key.found_env, mini, ok: false }] }
+  }
   const attempts = []
   for (const model of unique(MODEL_LADDER)) {
     const chat = await ollamaSmoke(model)
@@ -309,22 +386,12 @@ async function semanticRefresh({ baseline }) {
   const backupDir = path.join(VAULT, `graphify-out-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)
   await copyDir(GRAPHIFY_OUT, backupDir)
 
-  if (BACKEND !== 'ollama') {
-    await writeNeedsUpdate()
-    return {
-      ok: false,
-      status: 'unsupported_backend',
-      backup_dir: backupDir,
-      reason: `semantic helper currently automates ollama only, got ${BACKEND}`
-    }
-  }
-
   const selected = await pickSemanticModel()
   if (!selected.ok) {
     await writeNeedsUpdate()
     return {
       ok: false,
-      status: 'smoke_failed',
+      status: selected.status || 'smoke_failed',
       backup_dir: backupDir,
       selected
     }
@@ -337,11 +404,13 @@ async function semanticRefresh({ baseline }) {
     await fs.rename(MANIFEST_PATH, manifestBak)
   }
 
-  const env = {
-    OLLAMA_BASE_URL,
-    OLLAMA_API_KEY: process.env.OLLAMA_API_KEY || 'local'
-  }
-  const extract = await runCommand('graphify', ['extract', VAULT, '--backend', BACKEND, '--model', chosenModel], {
+  const env = BACKEND === 'ollama'
+    ? {
+        OLLAMA_BASE_URL,
+        OLLAMA_API_KEY: process.env.OLLAMA_API_KEY || 'local'
+      }
+    : {}
+  const extract = await runCommand('graphify', graphifyExtractArgs(VAULT, BACKEND, chosenModel), {
     cwd: ROOT,
     env
   })
@@ -413,6 +482,7 @@ async function main() {
     backend: BACKEND,
     model: MODEL,
     model_ladder: unique(MODEL_LADDER),
+    api_key_env: API_KEY_ENV_BY_BACKEND[BACKEND] || null,
     ollama_base_url: BACKEND === 'ollama' ? OLLAMA_BASE_URL : null,
     before: initialBefore,
     code_refresh: null,
