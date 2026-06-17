@@ -38,6 +38,7 @@ const TIMEOUT_MS = Number(arg('timeout-seconds', String(CONFIG.timeout_seconds |
 const SMOKE_TIMEOUT_MS = Number(arg('smoke-timeout-seconds', String(CONFIG.smoke_timeout_seconds || '120'))) * 1000
 const SHRINK_THRESHOLD = Number(arg('shrink-threshold', String(CONFIG.shrink_threshold || '0.85')))
 const MAX_CONCURRENCY = arg('max-concurrency', process.env.MNEMAZINE_GRAPHIFY_MAX_CONCURRENCY || String(CONFIG.max_concurrency || (BACKEND === 'kimi' ? '3' : '')))
+const ALLOW_PARTIAL_SEMANTIC = arg('allow-partial-semantic', process.env.MNEMAZINE_GRAPHIFY_ALLOW_PARTIAL || '1') !== '0'
 const JSON_OUT = hasFlag('json')
 const GRAPHIFY_OUT = path.join(VAULT, 'graphify-out')
 const GRAPH_PATH = path.join(GRAPHIFY_OUT, 'graph.json')
@@ -483,8 +484,8 @@ async function semanticRefresh({ baseline }) {
     summary.exists &&
     summary.nodes > 0 &&
     summary.edges > 0 &&
-    !invalidJson &&
-    !rateLimited &&
+    (!invalidJson || ALLOW_PARTIAL_SEMANTIC) &&
+    (!rateLimited || ALLOW_PARTIAL_SEMANTIC) &&
     !severeShrink &&
     reportRefresh.ok
 
@@ -507,6 +508,8 @@ async function semanticRefresh({ baseline }) {
       semantic_graph: semanticSummary,
       merge,
       rate_limited: rateLimited,
+      invalid_json_warnings: invalidJson,
+      partial_allowed: ALLOW_PARTIAL_SEMANTIC,
       attempted_graph: summary,
       baseline,
       report_refresh: reportRefresh
@@ -524,6 +527,8 @@ async function semanticRefresh({ baseline }) {
     semantic_graph: semanticSummary,
     merge,
     rate_limited: rateLimited,
+    invalid_json_warnings: invalidJson,
+    partial_allowed: ALLOW_PARTIAL_SEMANTIC,
     graph: summary,
     extract_stdout_tail: truncate(extract.stdout, 1800),
     extract_stderr_tail: truncate(extract.stderr, 1800),
@@ -549,6 +554,7 @@ async function main() {
     model_ladder: unique(MODEL_LADDER),
     api_key_env: API_KEY_ENV_BY_BACKEND[BACKEND] || null,
     max_concurrency: MAX_CONCURRENCY || null,
+    allow_partial_semantic: ALLOW_PARTIAL_SEMANTIC,
     ollama_base_url: BACKEND === 'ollama' ? OLLAMA_BASE_URL : null,
     before: initialBefore,
     code_refresh: null,
