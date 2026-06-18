@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { llmAvailable, llmText } from './mnemazine-llm.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const INBOX = process.env.MNEMAZINE_INBOX || path.join(ROOT, 'inbox')
@@ -242,6 +243,22 @@ async function extract(file) {
   return ''
 }
 
+// LLM recognition fallback (deep only). Used ONLY when local engines (Apple
+// Vision OCR / markitdown / whisper) produced nothing usable — keeps the default
+// path at 0 tokens. A vision-capable agent reads the file and transcribes it.
+async function llmExtract(file) {
+  const ext = path.extname(file).toLowerCase()
+  const kind = isImage(file) ? 'image' : isVideo(file) ? 'video frame still' : 'document'
+  const prompt = `Read the local ${kind} file and output ALL of its information as plain text: transcribe every readable word verbatim, then add a short factual description of any non-text content (diagrams, charts, UI). No commentary, no preamble.\n\nFILE: ${file}`
+  // Claude reads via the Read tool; Codex reads files in its working dir.
+  const text = await llmText(prompt, {
+    tools: ['Read'],
+    cwd: path.dirname(file),
+    timeoutMs: COMMAND_TIMEOUT_MS
+  })
+  return text || ''
+}
+
 async function writeExtractCache(source, hash, text, status) {
   await ensureDir(EXTRACTS)
   const ext = path.extname(source).toLowerCase().replace('.', '') || 'file'
@@ -281,27 +298,44 @@ async function main() {
   let processed = 0
   let cachedOnly = 0
   const toArchive = []
+  let failed = 0
+  const canLlmExtract = DEEP && llmAvailable()
   for (const [index, entry] of entries.entries()) {
     const file = path.join(INBOX, entry.name)
-    const hash = await sha256(file)
-    if (cache[hash]) continue
-    const text = await extract(file)
-    if (!hasUsableExtraction(text)) {
-      const record = await writeExtractCache(file, hash, text, 'needs_manual_context')
-      cache[hash] = { status: record.status, source_ref: record.source_ref, cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
-      toArchive.push({ file, hash })
-      cachedOnly += 1
-      if (PROGRESS_EVERY > 0 && (index + 1) % PROGRESS_EVERY === 0) {
-        console.error(JSON.stringify({ progress: index + 1, total: entries.length, processed, cached_only: cachedOnly }))
+    // Per-file isolation: one file's recognition failure must NEVER break the
+    // others. Any throw here is contained — the file stays in inbox for a retry.
+    try {
+      const hash = await sha256(file)
+      if (cache[hash]) continue
+      // Local-first recognition (0 tokens): Apple Vision OCR / markitdown / whisper.
+      let text = await extract(file)
+      // Only if local produced nothing usable AND deep is on: LLM recognition.
+      if (!hasUsableExtraction(text) && canLlmExtract && (isImage(file) || isVideo(file) || isMarkitdownDocument(file))) {
+        try {
+          const llmText = await llmExtract(file)
+          if (hasUsableExtraction(llmText)) text = llmText
+        } catch (err) {
+          console.error(JSON.stringify({ file: entry.name, llm_extract_error: String(err.message).slice(0, 200) }))
+        }
       }
-      continue
+      if (!hasUsableExtraction(text)) {
+        const record = await writeExtractCache(file, hash, text, 'needs_manual_context')
+        cache[hash] = { status: record.status, source_ref: record.source_ref, cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
+        toArchive.push({ file, hash })
+        cachedOnly += 1
+      } else {
+        await writeExtractCache(file, hash, text, 'extracted_for_note')
+        cache[hash] = { status: 'extracted_for_note', source_ref: sourceRef(hash), cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
+        toArchive.push({ file, hash })
+        processed += 1
+      }
+    } catch (err) {
+      // Isolated failure: log, leave file in inbox, keep going.
+      failed += 1
+      console.error(JSON.stringify({ file: entry.name, extract_error: String(err.message).slice(0, 200) }))
     }
-    await writeExtractCache(file, hash, text, 'extracted_for_note')
-    cache[hash] = { status: 'extracted_for_note', source_ref: sourceRef(hash), cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
-    toArchive.push({ file, hash })
-    processed += 1
     if (PROGRESS_EVERY > 0 && (index + 1) % PROGRESS_EVERY === 0) {
-      console.error(JSON.stringify({ progress: index + 1, total: entries.length, processed, cached_only: cachedOnly }))
+      console.error(JSON.stringify({ progress: index + 1, total: entries.length, processed, cached_only: cachedOnly, failed }))
     }
   }
   await fs.writeFile(CACHE, JSON.stringify(cache, null, 2), 'utf8')
@@ -325,7 +359,7 @@ async function main() {
   if (DEEP) {
     spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs')], { stdio: 'inherit', env: process.env })
   }
-  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, archived: archived.length, deep: DEEP, vault: VAULT }, null, 2))
+  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, vault: VAULT }, null, 2))
 }
 
 main().catch(err => {

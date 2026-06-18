@@ -137,3 +137,29 @@ export async function llmJson(prompt, schema, opts = {}) {
   const provider = activeProvider(opts)
   return provider === 'codex' ? codexJsonCall(prompt, schema, opts) : claudeJsonCall(prompt, schema, opts)
 }
+
+// Plain-text call (no schema) — used for vision/extraction fallback where the
+// agent reads a local file (image/PDF) and transcribes it. Tools opt-in; for
+// file reading pass tools:['Read']. Returns raw text. Claude primary; Codex at
+// parity (runs in the file's directory so it can open it).
+export async function llmText(prompt, opts = {}) {
+  const provider = activeProvider(opts)
+  if (provider === 'codex') {
+    if (!binExists(CODEX_BIN)) throw new Error(`codex binary not found: ${CODEX_BIN}`)
+    const res = spawnSync(CODEX_BIN, [
+      'exec', '-C', opts.cwd || process.cwd(), '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox', '-'
+    ], { input: prompt, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+    if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+    return String(res.stdout || '').trim()
+  }
+  const bin = resolveClaudeBin()
+  if (!binExists(bin)) throw new Error('claude binary not found: set MNEMAZINE_CLAUDE_BIN')
+  const args = ['-p', '--output-format', 'json']
+  if (opts.tools?.length) args.push('--allowedTools', opts.tools.join(','))
+  const res = spawnSync(bin, args, { input: prompt, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+  if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+  let envelope
+  try { envelope = JSON.parse(res.stdout) } catch { envelope = null }
+  return (envelope && typeof envelope.result === 'string' ? envelope.result : res.stdout).trim()
+}
