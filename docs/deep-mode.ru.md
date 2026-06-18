@@ -30,7 +30,7 @@ npm run synthesize -- --deep
 | Переменная | По умолчанию | Назначение |
 |----------|---------|---------|
 | `MNEMAZINE_LLM` | `claude` | Движок: `claude` (primary) или `codex` (паритет). |
-| `MNEMAZINE_CLAUDE_BIN` | `claude` (PATH) | Путь к Claude CLI. Зафиксируйте для headless-прогонов. |
+| `MNEMAZINE_CLAUDE_BIN` | авто | Claude CLI: авто-поиск через login-shell PATH, типовые установки (npm/Homebrew/standalone/Desktop), VSCode. Переопределите чтобы зафиксировать. |
 | `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Путь к бинарю Codex. |
 | `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Таймаут одного вызова. |
 | `MNEMAZINE_DEEP` | не задано | `1` включает deep-режим (enrich + атомизация + проверка + digest). |

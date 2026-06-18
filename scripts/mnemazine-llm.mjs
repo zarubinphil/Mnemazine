@@ -6,20 +6,53 @@
 // Both run as schema-instructed, web-capable headless agents. Default pipeline
 // never calls either — only the opt-in --deep path does.
 import { spawnSync } from 'node:child_process'
-import { existsSync, promises as fs } from 'node:fs'
+import { existsSync, readdirSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
 const DEFAULT_PROVIDER = process.env.MNEMAZINE_LLM || 'claude'
 const TIMEOUT_MS = Number(process.env.MNEMAZINE_LLM_TIMEOUT_MS || '420000')
 const CODEX_BIN = process.env.MNEMAZINE_CODEX_BIN || '/Applications/Codex.app/Contents/Resources/codex'
-// Claude binary: env first (recommended — pin it), else `claude` on PATH. The
-// VSCode native binary path is version-pinned, so we don't hardcode it.
-const CLAUDE_BIN = process.env.MNEMAZINE_CLAUDE_BIN || 'claude'
+
+const HOME = os.homedir()
+
+// Resolve the Claude CLI independently of how it was installed (npm global,
+// standalone installer, Homebrew, Claude Desktop, or the VSCode extension). Tries,
+// in order: explicit env -> login-shell PATH (respects the user's real install)
+// -> common absolute locations -> newest VSCode extension binary. Cached.
+let _claudeBin
+function resolveClaudeBin() {
+  if (_claudeBin !== undefined) return _claudeBin
+  if (process.env.MNEMAZINE_CLAUDE_BIN) return (_claudeBin = process.env.MNEMAZINE_CLAUDE_BIN)
+  // Login shell: picks up however the user installed claude (Desktop/npm/etc.).
+  const shell = process.env.SHELL || '/bin/zsh'
+  const viaShell = spawnSync(shell, ['-lic', 'command -v claude'], { encoding: 'utf8' }).stdout || ''
+  const shellHit = viaShell.trim().split('\n').pop()
+  if (shellHit && existsSync(shellHit)) return (_claudeBin = shellHit)
+  const candidates = [
+    path.join(HOME, '.claude/local/claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+    path.join(HOME, '.local/bin/claude'),
+    path.join(HOME, '.npm-global/bin/claude'),
+    '/Applications/Claude.app/Contents/Resources/claude'
+  ]
+  for (const c of candidates) if (existsSync(c)) return (_claudeBin = c)
+  // Newest VSCode extension native binary, if present.
+  const extDir = path.join(HOME, '.vscode/extensions')
+  try {
+    const dirs = readdirSync(extDir).filter(d => d.startsWith('anthropic.claude-code-')).sort()
+    for (const d of dirs.reverse()) {
+      const bin = path.join(extDir, d, 'resources/native-binary/claude')
+      if (existsSync(bin)) return (_claudeBin = bin)
+    }
+  } catch {}
+  return (_claudeBin = 'claude') // last resort: bare PATH lookup at spawn time
+}
 
 function binExists(bin) {
   if (bin.includes('/')) return existsSync(bin)
-  const which = spawnSync('command', ['-v', bin], { shell: true, encoding: 'utf8' })
+  const which = spawnSync(process.env.SHELL || '/bin/zsh', ['-lic', `command -v ${bin}`], { encoding: 'utf8' })
   return which.status === 0 && Boolean(which.stdout.trim())
 }
 
@@ -28,7 +61,7 @@ export function activeProvider(opts = {}) {
 }
 
 export function llmAvailable(provider = DEFAULT_PROVIDER) {
-  return provider === 'codex' ? binExists(CODEX_BIN) : binExists(CLAUDE_BIN)
+  return provider === 'codex' ? binExists(CODEX_BIN) : binExists(resolveClaudeBin())
 }
 
 // Wrap untrusted material (OCR / transcripts / scraped web text) so the agent
@@ -83,12 +116,13 @@ async function codexJsonCall(prompt, schema, opts) {
 // Never uses --dangerously-skip-permissions (constitution): unpermitted tools
 // simply do not run in -p mode.
 async function claudeJsonCall(prompt, schema, opts) {
-  if (!binExists(CLAUDE_BIN)) throw new Error(`claude binary not found: ${CLAUDE_BIN} (set MNEMAZINE_CLAUDE_BIN)`)
+  const bin = resolveClaudeBin()
+  if (!binExists(bin)) throw new Error(`claude binary not found (tried env, PATH, common installs, VSCode): set MNEMAZINE_CLAUDE_BIN`)
   const tools = opts.tools || []
   const full = `${prompt}\n\nReturn ONLY a single JSON object matching this JSON Schema (no prose, no code fence):\n${JSON.stringify(schema)}`
   const args = ['-p', '--output-format', 'json']
   if (tools.length) args.push('--allowedTools', tools.join(','))
-  const res = spawnSync(CLAUDE_BIN, args, { input: full, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+  const res = spawnSync(bin, args, { input: full, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
   if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
   // --output-format json wraps the turn: { type:'result', result:'<text>', ... }
   let envelope

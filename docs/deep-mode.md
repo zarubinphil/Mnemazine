@@ -30,7 +30,7 @@ All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MNEMAZINE_LLM` | `claude` | Engine: `claude` (primary) or `codex` (parity). |
-| `MNEMAZINE_CLAUDE_BIN` | `claude` (PATH) | Path to the Claude CLI. Pin it for headless runs. |
+| `MNEMAZINE_CLAUDE_BIN` | auto-discover | Claude CLI: auto-found via login-shell PATH, common installs (npm/Homebrew/standalone/Desktop), or VSCode. Override to pin. |
 | `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Path to the Codex binary. |
 | `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Per-call timeout. |
 | `MNEMAZINE_DEEP` | unset | `1` enables deep mode (enrich + atomize + verify + digest). |
