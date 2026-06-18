@@ -119,7 +119,7 @@ function parseRefresh(stdout) {
 }
 
 function hasQuotaError(parsed, text) {
-  return /insufficient_quota|exceeded your current quota/i.test(`${text || ''} ${JSON.stringify(parsed || {})}`)
+  return /insufficient_quota|exceeded your current quota|TPD rate limit|rate_limit_reached|rate limit reached/i.test(`${text || ''} ${JSON.stringify(parsed || {})}`)
 }
 
 async function runShard(shardPath, env) {
