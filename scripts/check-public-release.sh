@@ -5,10 +5,12 @@ ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # Private markers (machine paths, IPs, personal/project names) that must never ship publicly.
 PRIVATE_MARKERS='/Users/fil|72\.56|root@|Полезные знания|_ВХОДЯЩИЕ|TODOCUPS|ПКК|legal-practice|Adventure Book|AthenaOS|Филипп'
-# Token-like values (GitHub OAuth, OpenAI/Anthropic-style sk-, Slack xox*).
-# Require realistic lengths and a non-word boundary before `sk-` to avoid
-# false positives such as `risk-or-verification`.
-TOKEN_MARKERS='gho_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}'
+# Token-like values across common providers. Require realistic lengths and a
+# non-word boundary before `sk-` to avoid false positives like `risk-or-x`.
+# Covers: GitHub OAuth/PAT (gho_/ghp_/ghu_/ghs_/ghr_), OpenAI/Anthropic sk-,
+# Slack xox*, AWS access key (AKIA/ASIA), GitLab PAT (glpat-), Google API
+# (AIza), JWT (eyJ.header.payload), and PEM private-key blocks.
+TOKEN_MARKERS='gh[opusr]_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|(AKIA|ASIA)[A-Z0-9]{16}|glpat-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
 # Pick a scanner. Prefer ripgrep; fall back to POSIX grep so the gate still runs
 # on machines without rg. A missing scanner must HARD-FAIL, never silently pass.
@@ -26,12 +28,16 @@ if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   TRACKED_ONLY=1
 fi
 
+# Files that could ship publicly: everything git tracks PLUS untracked files
+# not covered by .gitignore (a staged-but-uncommitted secret would otherwise
+# slip past a tracked-only scan). Ignored runtime noise (.mnemazine, backups)
+# is correctly skipped — it never reaches a public push.
 tracked_files() {
   local files=()
   while IFS= read -r -d '' file; do
     [ "$file" = "scripts/check-public-release.sh" ] && continue
     files+=("$ROOT/$file")
-  done < <(git -C "$ROOT" ls-files -z)
+  done < <(git -C "$ROOT" ls-files -z --cached --others --exclude-standard)
   printf '%s\0' "${files[@]}"
 }
 
