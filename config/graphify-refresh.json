@@ -1,10 +1,10 @@
 {
   "backend": "ollama",
-  "model": "qwen:32b",
+  "model": "qwen2.5-coder:7b",
   "models": [
+    "qwen2.5-coder:7b",
     "qwen:32b",
-    "gemma2:9b",
-    "qwen2.5-coder:7b"
+    "gemma2:9b"
   ],
   "timeout_seconds": 900,
   "smoke_timeout_seconds": 120,

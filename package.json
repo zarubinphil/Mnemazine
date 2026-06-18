@@ -18,6 +18,7 @@
     "digest": "node scripts/mnemazine-digest.mjs",
     "quality": "node scripts/mnemazine-vault-quality-gate.mjs",
     "report:quality": "node scripts/mnemazine-report-quality-gate.mjs",
+    "complete": "node scripts/mnemazine-complete-check.mjs",
     "public-check": "bash scripts/check-public-release.sh",
     "release-check": "node scripts/mnemazine-release-check.mjs"
   },

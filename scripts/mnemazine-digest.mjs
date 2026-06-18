@@ -20,7 +20,6 @@ function arg(name, fb = '') {
 }
 
 const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
-const GRAPH = path.resolve(arg('graph', path.join(VAULT, 'graphify-out/graph.json')))
 const SESSION = arg('session', new Date().toISOString().slice(0, 10))
 const PROVIDER = arg('provider', process.env.MNEMAZINE_LLM || 'claude')
 const FORCE = argv.includes('--force')
@@ -64,32 +63,33 @@ ${conns}
 ${fenceUntrusted('ЗАМЕТКА', noteText.slice(0, 12000))}`
 }
 
-// Map each note (vault-relative path) to neighbor labels from the Graphify graph.
+// Map each note (vault-relative path) to related notes (also vault-relative paths).
+// ponytail: derive note↔note links from note metadata, not the Graphify code-graph —
+// `graphify update` emits only intra-note structural edges (contains), never
+// note-to-note semantic links (those need the separate `graphify --update` pass with a
+// model key). Same cluster_id = sibling atoms from one source; shared source-URL host =
+// topically related. Cheap, deterministic, no extra deps. Cap at 6, siblings first.
+const MAX_CONNECTIONS = 6
 async function loadConnections() {
   const byNote = new Map()
-  let graph
-  try { graph = JSON.parse(await fs.readFile(GRAPH, 'utf8')) } catch { return byNote }
-  const edgeKey = Array.isArray(graph.links) ? 'links' : Array.isArray(graph.edges) ? 'edges' : 'links'
-  const labelById = new Map()
-  const fileById = new Map()
-  for (const n of graph.nodes || []) {
-    if (!n || !n.id) continue
-    labelById.set(n.id, n.label || n.norm_label || n.id)
-    if (n.source_file) fileById.set(n.id, n.source_file)
+  const notes = [] // { rel, cluster, hosts:Set }
+  for (const file of await walk(VAULT)) {
+    const text = await fs.readFile(file, 'utf8').catch(() => '')
+    if (!text) continue
+    const cluster = text.match(/^cluster_id:\s*"?([^"\n]+)"?/m)?.[1]?.trim() || null
+    const hosts = new Set()
+    for (const m of text.matchAll(/https?:\/\/([^/\s)]+)/g)) hosts.add(m[1].replace(/^www\./, ''))
+    notes.push({ rel: path.relative(VAULT, file), cluster, hosts })
   }
-  const neighbors = new Map() // id -> Set(label)
-  for (const e of graph[edgeKey] || []) {
-    if (!e || e.source == null || e.target == null) continue
-    for (const [a, b] of [[e.source, e.target], [e.target, e.source]]) {
-      if (!neighbors.has(a)) neighbors.set(a, new Set())
-      const lbl = labelById.get(b)
-      if (lbl) neighbors.get(a).add(lbl)
+  for (const a of notes) {
+    const siblings = [], related = []
+    for (const b of notes) {
+      if (b.rel === a.rel) continue
+      if (a.cluster && b.cluster === a.cluster) siblings.push(b.rel)
+      else if ([...a.hosts].some(h => b.hosts.has(h))) related.push(b.rel)
     }
-  }
-  for (const [id, file] of fileById) {
-    const rel = file.replace(/^\.\//, '')
-    const list = [...(neighbors.get(id) || [])].slice(0, 12)
-    if (list.length) byNote.set(rel, list)
+    const list = [...siblings, ...related].slice(0, MAX_CONNECTIONS)
+    if (list.length) byNote.set(a.rel, list)
   }
   return byNote
 }
@@ -111,7 +111,7 @@ function titleOf(text, file) {
 }
 
 function spravkaBlock(d, connections) {
-  const conns = connections.length ? connections.map(c => `- [[${c.replace(/\.md$/, '')}]]`).join('\n') : '- (связи появятся после графа)'
+  const conns = connections.length ? connections.map(c => `- [[${c.replace(/\.md$/, '')}]]`).join('\n') : '- (отдельных связей не найдено)'
   return `${SPRAVKA}
 
 **${d.zagolovok}**
@@ -148,7 +148,10 @@ async function main() {
       continue
     }
     if (!d?.zagolovok) continue
-    const stripped = FORCE ? text.replace(new RegExp(`\\n*${SPRAVKA}[\\s\\S]*?(?=\\n## |$)`, 'm'), '\n') : text
+    // Справка is always appended last, so strip from its first occurrence to EOF.
+    // (No `m` flag: a per-line `$` would stop at the first newline and leave the old
+    // Справка in place, duplicating it on every --force run.)
+    const stripped = FORCE ? text.replace(new RegExp(`\\n*${SPRAVKA}[\\s\\S]*$`), '\n') : text
     const block = spravkaBlock(d, connections)
     await fs.writeFile(file, `${stripped.trimEnd()}\n\n${block}`, 'utf8')
     summary.push({ rel, title: titleOf(text, file), zagolovok: d.zagolovok, connections })
@@ -162,13 +165,19 @@ async function main() {
     const body = [
       `---\ntitle: "Сводка знаний — ${SESSION}"\ntype: "knowledge-digest"\nsource_ref: "digest:${SESSION}"\n---`,
       `\n# Сводка знаний — ${SESSION}\n`,
-      `Обработано заметок: ${summary.length}. Ниже — что узнано и как связано.\n`,
+      `## What This Is\n\nСводка связывает новые knowledge-note после digest-прогона и показывает, какие заметки теперь имеют человеческую справку.\n`,
+      `## Why It Matters\n\nЭто финальный reuse-слой: после intake знание видно не только как отдельные файлы, но и как карта применимых связей.\n`,
+      `## How To Use It\n\n- Открыть связанные заметки из списка ниже.\n- Взять сильные next actions в работу.\n- Проверить слабые или неподтверждённые связи перед публикацией.\n`,
+      `## Source\n\n- source_ref: digest:${SESSION}\n- processed_notes: ${summary.length}\n`,
+      `## Verification\n\nСводка построена локально из заметок vault и связей digest-этапа. Не является внешней факт-проверкой.\n`,
+      `## Related Notes\n\n- [[Mnemazine Protocol]]\n`,
+      `## Reuse\n\nОбработано заметок: ${summary.length}. Ниже — что узнано и как связано.\n`,
       ...summary.map(s => `## ${s.zagolovok}\n\n- Заметка: [[${s.rel.replace(/\.md$/, '')}]]\n- Связи: ${s.connections.length ? s.connections.map(c => `[[${c.replace(/\.md$/, '')}]]`).join(', ') : '—'}\n`)
     ].join('\n')
     await fs.writeFile(path.join(dir, `Сводка-${SESSION}.md`), body, 'utf8')
   }
 
-  console.log(JSON.stringify({ ok: true, provider: PROVIDER, written, summary: summary.length, graph: connByNote.size ? GRAPH : 'none' }, null, 2))
+  console.log(JSON.stringify({ ok: true, provider: PROVIDER, written, summary: summary.length, linked: connByNote.size }, null, 2))
 }
 
 main().catch(err => { console.error(err.message || err); process.exit(1) })

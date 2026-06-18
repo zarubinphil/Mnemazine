@@ -111,7 +111,10 @@ The run performs:
 4. final note creation with `source_ref` and `source_hash`;
 5. vault quality gate;
 6. archive move only after the quality gate passes;
-7. Graphify update when available.
+7. guarded Graphify refresh attempt;
+8. weekly HTML report regeneration;
+9. report quality gate for the regenerated weekly HTML;
+10. action brief at `.mnemazine/state/last-action-brief.md`.
 
 The default runner is intentionally conservative. It does not publish data, use private cookies, or send local files to external services. It writes local notes and archives processed source files under `.mnemazine/archive/`.
 

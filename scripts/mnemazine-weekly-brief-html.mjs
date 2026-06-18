@@ -30,6 +30,18 @@ function summaryOf(text) {
   return block.replace(/[#*_`>-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 520)
 }
 
+function actionOf(text) {
+  return text.match(/Next action:\s*(.+)$/mi)?.[1]?.trim() ||
+    text.match(/Следующее действие[:\s]+(.+)$/mi)?.[1]?.trim() ||
+    'Прочитать, решить статус и связать с ближайшим проектом.'
+}
+
+function linksOf(text) {
+  return [...new Set(String(text).match(/\bhttps?:\/\/[^\s)]+/g) || [])]
+    .map(url => url.replace(/[.,;]+$/, ''))
+    .slice(0, 4)
+}
+
 await fs.mkdir(REPORTS, { recursive: true })
 await fs.mkdir(STATE, { recursive: true })
 const files = await walk(VAULT)
@@ -39,7 +51,7 @@ for (const file of files) {
   const stat = await fs.stat(file)
   if (stat.mtimeMs < weekAgo) continue
   const text = await fs.readFile(file, 'utf8')
-  cards.push({ file: path.relative(VAULT, file), title: titleOf(text, file), summary: summaryOf(text) })
+  cards.push({ file: path.relative(VAULT, file), title: titleOf(text, file), summary: summaryOf(text), action: actionOf(text), links: linksOf(text) })
 }
 
 const html = `<!doctype html>
@@ -63,7 +75,7 @@ main{padding:34px max(18px,6vw) 70px}.grid{display:grid;grid-template-columns:re
 <body>
 <header><section class="hero"><h1>Mnemazine Weekly</h1><p class="lead">Сводка знаний за последние 7 дней: что появилось, что стоит взять в работу, что можно забыть.</p><button id="export" style="margin-top:18px;border:0;background:#fff;color:var(--blue);font-weight:700;border-radius:8px;padding:11px 16px;cursor:pointer">⬇ Скачать weekly-state.json</button></section></header>
 <main><section class="grid">
-${cards.map((c, i) => `<article class="card" data-id="${esc(c.file)}"><div class="path">${esc(c.file)}</div><h2>${esc(c.title)}</h2><p>${esc(c.summary)}</p><div class="actions"><button data-v="read">Прочитал</button><button data-v="work">В работу</button><button data-v="forget">Забыть</button></div></article>`).join('\n') || '<article class="card"><h2>За неделю новых заметок нет</h2><p>Положите материалы в inbox и запустите Mnemazine.</p></article>'}
+${cards.map((c, i) => `<article class="card" data-id="${esc(c.file)}" data-knowledge-atom="${i + 1}"><div class="path">${esc(c.file)}</div><h2>${esc(c.title)}</h2><p><strong>Синтез:</strong> ${esc(c.summary)}</p><p><strong>Расширил источниками:</strong> ${c.links.length ? c.links.map(url => `<a href="${esc(url)}">${esc(new URL(url).hostname.replace(/^www\\./, ''))}</a>`).join(' · ') : `<a href="../vault/${esc(c.file)}">локальная заметка</a>`}</p><p><strong>Где применить:</strong> В связанных проектах, skills, агентных правилах или backlog, если карточка отмечена "В работу".</p><p><strong>Проверка и риск:</strong> Проверить публичные источники перед публикацией или автоматизацией.</p><p><strong>Следующее действие:</strong> ${esc(c.action)}</p><div class="actions"><button data-v="read">Прочитал</button><button data-v="work">В работу</button><button data-v="forget">Забыть</button></div></article>`).join('\n') || '<article class="card" data-knowledge-atom="empty"><h2>За неделю новых заметок нет</h2><p>Положите материалы в inbox и запустите Mnemazine.</p></article>'}
 </section></main>
 <script>
 const KEY='mnemazine-weekly-state';

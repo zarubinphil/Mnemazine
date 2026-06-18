@@ -111,7 +111,10 @@ node scripts/mnemazine-run.mjs
 4. создание финальной заметки с `source_ref` и `source_hash`;
 5. gate качества vault;
 6. перенос исходников в архив только после зелёного gate;
-7. обновление Graphify, если он установлен.
+7. guarded-попытка обновить Graphify;
+8. обновление weekly HTML-отчёта;
+9. report quality gate для обновлённого weekly HTML;
+10. action brief в `.mnemazine/state/last-action-brief.md`.
 
 Раннер по умолчанию намеренно консервативен. Он не публикует данные, не использует приватные cookie и не отправляет локальные файлы во внешние сервисы. Он пишет локальные заметки и архивирует обработанные исходники под `.mnemazine/archive/`.
 

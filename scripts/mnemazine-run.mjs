@@ -18,6 +18,7 @@ const VIDEO_FRAMES = path.join(ROOT, '.mnemazine/cache/video-frames')
 const VIDEO_QUEUE = path.join(ROOT, '.mnemazine/cache/video-queue.jsonl')
 const EXTRACTS = process.env.MNEMAZINE_EXTRACTS || path.join(ROOT, '.mnemazine/cache/extracted')
 const SYNTHESIZE = process.env.MNEMAZINE_SYNTHESIZE !== '0'
+const FINISH = process.env.MNEMAZINE_FINISH !== '0'
 // Opt-in deep stage (atomization + web/LLM verification, README:230 pipeline).
 // Default OFF: the runner stays conservative — local only, no external calls.
 // Enable with `--deep` or MNEMAZINE_DEEP=1; forwarded to synthesize.
@@ -281,9 +282,87 @@ async function archiveFile(file, hash) {
   const dir = path.join(ARCHIVE, month)
   await ensureDir(dir)
   const ext = path.extname(file)
-  const target = path.join(dir, `${hash}${ext}`)
+  let target = path.join(dir, `${hash}${ext}`)
+  let suffix = 1
+  while (existsSync(target)) {
+    target = path.join(dir, `${hash}-${suffix}${ext}`)
+    suffix += 1
+  }
   await fs.rename(file, target)
   return target
+}
+
+function runLocalNodeScript(script, args = []) {
+  const file = path.join(ROOT, 'scripts', script)
+  if (!existsSync(file)) return { skipped: true, reason: `${script} missing` }
+  const result = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', env: process.env, timeout: COMMAND_TIMEOUT_MS * 5 })
+  return {
+    skipped: false,
+    ok: result.status === 0,
+    code: result.status,
+    stdout: compact(result.stdout, 1200),
+    stderr: compact(result.stderr, 1200)
+  }
+}
+
+async function recentNotes(limit = 8) {
+  const notes = []
+  async function walk(dir) {
+    for (const item of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (item.name.startsWith('graphify-out')) continue
+      const file = path.join(dir, item.name)
+      if (item.isDirectory()) await walk(file)
+      else if (item.isFile() && item.name.endsWith('.md')) {
+        const stat = await fs.stat(file)
+        const text = await fs.readFile(file, 'utf8').catch(() => '')
+        const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(file, '.md')
+        const action = text.match(/Next action:\s*(.+)$/mi)?.[1]?.trim() || text.match(/- Next action:\s*(.+)$/mi)?.[1]?.trim() || ''
+        notes.push({ file: path.relative(VAULT, file), title, action, mtimeMs: stat.mtimeMs })
+      }
+    }
+  }
+  await walk(VAULT)
+  return notes.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, limit)
+}
+
+async function writeActionBrief(finishResult) {
+  const dir = path.join(ROOT, '.mnemazine/state')
+  await ensureDir(dir)
+  const notes = await recentNotes()
+  const lines = [
+    `# Mnemazine Action Brief — ${new Date().toISOString().slice(0, 10)}`,
+    '',
+    '## Status',
+    '',
+    `- Inbox: ${(await fs.readdir(INBOX).catch(() => [])).filter(name => !name.startsWith('.')).length}`,
+    `- Vault: ${VAULT}`,
+    `- Quality gate: ${finishResult.quality?.ok ? 'ok' : 'check output'}`,
+    `- Graph refresh: ${finishResult.graph?.ok ? 'ok' : finishResult.graph?.code === 2 ? 'partial / semantic pending' : finishResult.graph?.skipped ? 'skipped' : 'failed'}`,
+    `- Weekly report: ${finishResult.weekly?.ok ? 'ok' : finishResult.weekly?.skipped ? 'skipped' : 'failed'}`,
+    `- Report quality: ${finishResult.report_quality?.ok ? 'ok' : finishResult.report_quality?.skipped ? 'skipped' : 'failed'}`,
+    '',
+    '## Next Actions',
+    '',
+    ...(notes.length
+      ? notes.map(note => `- ${note.title}${note.action ? ` — ${note.action}` : ''} (${note.file})`)
+      : ['- No recent notes found.'])
+  ]
+  const out = path.join(dir, 'last-action-brief.md')
+  await fs.writeFile(out, `${lines.join('\n')}\n`, 'utf8')
+  return out
+}
+
+async function finishRun() {
+  const result = {}
+  result.quality = runLocalNodeScript('mnemazine-vault-quality-gate.mjs')
+  result.graph = runLocalNodeScript('mnemazine-refresh-graphify.mjs', ['--vault', VAULT, '--mode', 'auto', '--json'])
+  result.weekly = runLocalNodeScript('mnemazine-weekly-brief-html.mjs')
+  const weeklyReport = result.weekly?.stdout?.match(/\/[^\s]+\.html/)?.[0]
+  result.report_quality = weeklyReport
+    ? runLocalNodeScript('mnemazine-report-quality-gate.mjs', ['--report', weeklyReport])
+    : { skipped: true, reason: 'weekly report path missing' }
+  result.brief = await writeActionBrief(result)
+  return result
 }
 
 async function main() {
@@ -306,7 +385,11 @@ async function main() {
     // others. Any throw here is contained — the file stays in inbox for a retry.
     try {
       const hash = await sha256(file)
-      if (cache[hash]) continue
+      if (cache[hash]) {
+        toArchive.push({ file, hash })
+        cachedOnly += 1
+        continue
+      }
       // Local-first recognition (0 tokens): Apple Vision OCR / markitdown / whisper.
       let text = await extract(file)
       // Only if local produced nothing usable AND deep is on: LLM recognition.
@@ -351,15 +434,13 @@ async function main() {
   if (quality.status !== 0) process.exit(quality.status || 1)
   const archived = []
   for (const item of toArchive) archived.push(await archiveFile(item.file, item.hash))
-  if (spawnSync('graphify', ['--version'], { encoding: 'utf8' }).status === 0) {
-    spawnSync('graphify', ['update', VAULT], { stdio: 'inherit' })
-  }
   // Deep + final stage: Russian humanizer digest, AFTER the graph so connections
   // are real. Writes a Справка into each note + one session summary note.
   if (DEEP) {
     spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs')], { stdio: 'inherit', env: process.env })
   }
-  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, vault: VAULT }, null, 2))
+  const finish = FINISH ? await finishRun() : { skipped: true }
+  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, finish, vault: VAULT }, null, 2))
 }
 
 main().catch(err => {

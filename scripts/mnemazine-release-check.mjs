@@ -62,6 +62,7 @@ async function checkSyntax() {
     'scripts/mnemazine-weekly-state.mjs',
     'scripts/mnemazine-digest.mjs',
     'scripts/mnemazine-report-quality-gate.mjs',
+    'scripts/mnemazine-complete-check.mjs',
     'scripts/mnemazine-release-check.mjs'
   ]
   for (const script of scripts) {
@@ -120,11 +121,25 @@ async function demoSmoke() {
   const cache = await readJson(path.join(temp, '.mnemazine/cache/processed-hashes.json'))
   const cacheOnly = Object.values(cache).filter(value => value && typeof value === 'object' && value.status === 'needs_manual_context')
   if (cacheOnly.length !== 1) throw new Error(`demo smoke failed: expected 1 cache-only source, got ${cacheOnly.length}`)
+
+  await fs.copyFile(path.join(ROOT, 'demo/inbox/example-guide.md'), path.join(inbox, 'cached-guide.md'))
+  await must('demo cached-source archive smoke', process.execPath, ['scripts/mnemazine-run.mjs'], {
+    env: {
+      MNEMAZINE_ROOT: temp,
+      MNEMAZINE_INBOX: inbox,
+      MNEMAZINE_VAULT: vault
+    }
+  })
+  const cachedInboxFiles = await fs.readdir(inbox)
+  if (cachedInboxFiles.length !== 0) throw new Error(`demo cached smoke failed: inbox not empty (${cachedInboxFiles.join(', ')})`)
+  const archivedAfterCachedRun = await listFiles(path.join(temp, '.mnemazine/archive'))
+  if (archivedAfterCachedRun.length !== 3) throw new Error(`demo cached smoke failed: expected 3 archived sources, got ${archivedAfterCachedRun.length}`)
 }
 
 async function qualityAndPublicChecks() {
   await must('demo vault quality', 'npm', ['run', 'quality', '--', '--vault', 'demo/vault'])
   await reportQualityGateSmoke()
+  await must('complete gate smoke', 'npm', ['run', 'complete'])
   await must('public release scan', 'npm', ['run', 'public-check'])
 }
 
