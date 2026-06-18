@@ -23,6 +23,8 @@ const MIN_CLUSTER_CHARS = Number(arg('min-cluster-chars', '80'))
 // and never needs codex. Flag also honoured via MNEMAZINE_DEEP=1.
 const DEEP = argv.includes('--deep') || argv.includes('--atomize') || process.env.MNEMAZINE_DEEP === '1'
 const MAX_ATOMS = Number(arg('max-atoms', process.env.MNEMAZINE_MAX_ATOMS || '20'))
+// Enrichment is on within --deep unless explicitly disabled (it needs the network).
+const ENRICH = DEEP && process.env.MNEMAZINE_ENRICH !== '0' && !argv.includes('--no-enrich')
 
 const sourceHints = [
   { re: /mcp|model context protocol|filesystem mcp|memory mcp|zapier/i, name: 'Model Context Protocol docs', url: 'https://modelcontextprotocol.io/docs/getting-started/intro' },
@@ -338,8 +340,11 @@ const ATOM_SCHEMA = {
   }
 }
 
-function atomPrompt(cluster, sources) {
-  const text = cluster.records.map(r => compact(r.text, 4000)).join('\n---\n').slice(0, 24000)
+function atomPrompt(cluster, sources, materialOverride) {
+  // When enrichment ran, atomize the EXPANDED knowledge; else the raw capture.
+  const text = materialOverride
+    ? String(materialOverride).slice(0, 28000)
+    : cluster.records.map(r => compact(r.text, 4000)).join('\n---\n').slice(0, 24000)
   const urls = sources.map(s => s.url).join(', ') || 'none detected'
   return `You are Mnemazine's atomization agent. Split the raw material below into FOCUSED, atomic knowledge notes — one idea per atom, up to ${MAX_ATOMS}. Do NOT merge unrelated ideas; do NOT invent facts not present in the material. Each atom: a precise title, a one-paragraph "what", a one-paragraph "why it matters", 2-5 concrete "how to use" bullets, one "next action", and the subset of source URLs that support it (from: ${urls}; [] if none).
 
@@ -348,10 +353,47 @@ Return ONLY JSON matching the schema.
 ${fenceUntrusted('MATERIAL', text)}`
 }
 
-async function atomizeCluster(cluster, sources) {
-  const result = await llmJson(atomPrompt(cluster, sources), ATOM_SCHEMA)
+async function atomizeCluster(cluster, sources, materialOverride) {
+  const result = await llmJson(atomPrompt(cluster, sources, materialOverride), ATOM_SCHEMA)
   const atoms = Array.isArray(result?.atoms) ? result.atoms : []
   return atoms.filter(a => a && a.title && a.what).slice(0, MAX_ATOMS)
+}
+
+// --- Enrichment (knowledge EXPANSION, README "research", G/B) ---
+// A web-capable LLM agent researches the captured material and grows it "as much
+// as truly needed": pulls primary sources, current facts/versions, practitioner
+// experience — each added fact tied to a fetched URL (anti-hallucination). Output
+// feeds atomize, so atoms are built from EXPANDED knowledge, not just the capture.
+const ENRICH_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['enriched', 'sources'],
+  properties: {
+    enriched: { type: 'string' },
+    sources: { type: 'array', items: { type: 'string' } },
+    added_facts: { type: 'array', items: { type: 'string' } }
+  }
+}
+
+function enrichPrompt(text, sources) {
+  const urls = sources.map(s => s.url).join(', ') || 'none detected'
+  return `You are Mnemazine's research-enrich agent. The MATERIAL below is a SEED, not the final knowledge. Research it with available tools (web search, web fetch, and any configured MCP web tools) and EXPAND it as much as is genuinely useful — no padding. Pull: the primary source, current facts/numbers/versions, concrete examples, and real practitioner experience (issues, pros/cons, gotchas) with thread/issue URLs. Anti-hallucination: every added fact MUST trace to a fetched URL; if unconfirmed, say so, do not strengthen it. Keep it tight and factual.
+
+Known source hints: ${urls}.
+
+Produce: "enriched" = the expanded knowledge as clean prose (English ok; the human-readable Russian digest is a later stage), "sources" = all source URLs used, "added_facts" = short bullet list of what you added beyond the seed.
+
+${fenceUntrusted('MATERIAL', text)}`
+}
+
+async function enrichCluster(cluster, sources) {
+  const text = cluster.records.map(r => compact(r.text, 6000)).join('\n---\n').slice(0, 24000)
+  const res = await llmJson(enrichPrompt(text, sources), ENRICH_SCHEMA, {
+    tools: ['WebSearch', 'WebFetch', 'mcp__firecrawl', 'mcp__tavily']
+  })
+  const enriched = typeof res?.enriched === 'string' ? res.enriched.trim() : ''
+  const addedSources = Array.isArray(res?.sources) ? res.sources.filter(Boolean) : []
+  return { enriched, addedSources }
 }
 
 function atomFingerprint(atom, clusterId = '') {
@@ -432,6 +474,7 @@ for (const record of records) {
 let written = 0
 let skipped = 0
 let atomized = 0
+let enriched_clusters = 0
 const useAtomize = DEEP && llmAvailable()
 if (DEEP && !llmAvailable()) {
   console.error('[synthesize] --deep requested but LLM unavailable; falling back to local template synthesis')
@@ -446,7 +489,21 @@ for (const cluster of clusters.values()) {
     if (useAtomize) {
       try {
         const sources = publicSources(part.records.map(r => r.text).join('\n\n'))
-        const atoms = await atomizeCluster(part, sources)
+        // Expand the knowledge first (research), then atomize the EXPANDED material.
+        let material
+        if (ENRICH) {
+          try {
+            const { enriched, addedSources } = await enrichCluster(part, sources)
+            if (enriched && enriched.length > 200) {
+              material = enriched
+              for (const u of addedSources) if (!sources.some(s => s.url === u)) sources.push({ name: hostOf(u) || 'Source', url: u })
+              enriched_clusters += 1
+            }
+          } catch (err) {
+            console.error(`[synthesize] enrich failed for cluster ${cluster.id}: ${err.message}; atomizing raw capture`)
+          }
+        }
+        const atoms = await atomizeCluster(part, sources, material)
         let wroteAtom = false
         for (const atom of atoms) {
           const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
@@ -484,4 +541,4 @@ for (const cluster of clusters.values()) {
 // degraded: --deep was requested but the deep path could not run (codex absent),
 // so the run silently fell back to local templates. Callers can detect this.
 const degraded = DEEP && !llmAvailable()
-console.log(JSON.stringify({ ok: true, degraded, records: records.length, clusters: clusters.size, written, atomized, skipped }, null, 2))
+console.log(JSON.stringify({ ok: true, degraded, records: records.length, clusters: clusters.size, written, atomized, enriched: enriched_clusters, skipped }, null, 2))
