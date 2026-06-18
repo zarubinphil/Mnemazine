@@ -23,16 +23,28 @@ If deep mode is requested but Codex is not available, the run **falls back to lo
 
 ## The Codex bridge
 
-All LLM calls go through one shared module: `scripts/mnemazine-codex.mjs`. It reuses the same headless pattern as the repo's `scripts/kb-*-codex.sh` scripts — a single schema-constrained `codex exec` call, JSON captured via `-o`, prompt on stdin. There is no second LLM client.
+All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). The **code-first engine is Claude** (headless `claude -p`); **Codex is kept at parity** — the same contract, so anything that works via Claude also works via Codex. There is no third LLM client. `mnemazine-codex.mjs` remains as a thin back-compat shim.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Path to the Codex binary. Override to point at another install (must be an existing executable). |
-| `MNEMAZINE_CODEX_TIMEOUT_MS` | `300000` | Per-call timeout. |
-| `MNEMAZINE_DEEP` | unset | `1` enables deep mode (atomize + verify). |
+| `MNEMAZINE_LLM` | `claude` | Engine: `claude` (primary) or `codex` (parity). |
+| `MNEMAZINE_CLAUDE_BIN` | `claude` (PATH) | Path to the Claude CLI. Pin it for headless runs. |
+| `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Path to the Codex binary. |
+| `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Per-call timeout. |
+| `MNEMAZINE_DEEP` | unset | `1` enables deep mode (enrich + atomize + verify + digest). |
+| `MNEMAZINE_ENRICH` | `1` within deep | `0` (or `--no-enrich`) skips the enrichment stage. |
 | `MNEMAZINE_MAX_ATOMS` | `20` | Cap on atoms produced per source cluster. |
+| `MNEMAZINE_OWNER_CONTEXT` | generic | Personal project context for the digest's "why it matters". Or put it in the gitignored `.mnemazine/owner-context.txt`. |
+
+### Enrichment (knowledge expansion)
+
+Before atomization, deep mode runs a web-capable LLM agent that **researches and expands** the captured material "as much as is genuinely useful" — primary sources, current facts/versions, practitioner experience — with every added fact tied to a fetched URL (anti-hallucination). Atoms are then built from the **expanded** knowledge, not just the raw capture. Disable with `--no-enrich` / `MNEMAZINE_ENRICH=0`.
+
+### Digest (Russian human-readable summary)
+
+After Graphify, `scripts/mnemazine-digest.mjs` (`npm run digest`) writes a humanizer-style Russian **Справка** into each note — *Что это / О чём / Почему важно мне / Связи* — with real connections pulled from the graph, plus one session summary note mapping all atoms. This is the reuse surface: open one note, understand the knowledge and how it connects. Idempotent (skips notes that already have a Справка unless `--force`).
 
 ### Atomization (G4)
 
