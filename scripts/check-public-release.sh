@@ -86,4 +86,30 @@ check() {
 check "$PRIVATE_MARKERS" "private marker"
 check "$TOKEN_MARKERS" "token-like value"
 
+# Local extraction cache is gitignored (never shipped), but captured screenshots
+# / PDFs can carry credentials that would flow into synthesized notes. Scan it
+# for token-like secrets only (personal/Cyrillic text is expected here and fine).
+# Token-only, dir-scoped, skipped when the cache does not exist (clean checkout).
+scan_dir_tokens() {
+  local dir="$1"
+  [ -d "$dir" ] || return 1
+  if [ "$SCANNER" = "rg" ]; then
+    rg -n "$TOKEN_MARKERS" "$dir"
+  else
+    grep -rEn "$TOKEN_MARKERS" "$dir"
+  fi
+}
+
+EXTRACTS_DIR="${MNEMAZINE_EXTRACTS:-$ROOT/.mnemazine/cache/extracted}"
+status=0
+scan_dir_tokens "$EXTRACTS_DIR" || status=$?
+if [ "$status" -eq 0 ]; then
+  echo "Public release check failed: token-like secret found in extraction cache ($EXTRACTS_DIR)." >&2
+  echo "A captured screenshot/PDF likely contains a credential. Remove it before it reaches a note." >&2
+  exit 1
+elif [ "$status" -ge 2 ]; then
+  echo "Public release check errored: scanner '$SCANNER' failed (exit $status) scanning extraction cache." >&2
+  exit 1
+fi
+
 echo "Public release check passed."
