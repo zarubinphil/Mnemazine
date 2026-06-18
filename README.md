@@ -257,6 +257,7 @@ That matters because a real memory must be reproducible. A note should be able t
 - [Apple Vision OCR](docs/apple-vision.md)
 - [Graphify](docs/graphify.md)
 - [Weekly HTML Brief](docs/weekly-html.md)
+- [Deep Mode (atomization + verification)](docs/deep-mode.md)
 
 ## Safety
 
