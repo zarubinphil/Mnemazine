@@ -2,7 +2,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { codexAvailable, codexJson } from './mnemazine-codex.mjs'
+import { codexAvailable, codexJson, fenceUntrusted } from './mnemazine-codex.mjs'
 import { verifyLocal, verifyDeep } from './mnemazine-verify.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
@@ -134,8 +134,9 @@ function uniq(values) {
 // ponytail: exact-dup only via source-ref hash; near-duplicate (paraphrase)
 // dedup needs embeddings — wire fastembed/Ollama here if dup clusters appear.
 function fingerprint(cluster) {
-  const refs = cluster.records.map(record => String(record.source_ref || '')).sort()
-  return crypto.createHash('sha1').update(refs.join(' ')).digest('hex').slice(0, 10)
+  const refs = cluster.records.map(record => String(record.source_ref || "")).sort()
+  const key = [cluster.id || "", cluster.part || 1, ...refs].join(" ")
+  return crypto.createHash("sha1").update(key).digest("hex").slice(0, 10)
 }
 
 function extractUrls(text) {
@@ -216,7 +217,13 @@ async function listRecords() {
   for (const entry of await fs.readdir(EXTRACTS, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue
     const file = path.join(EXTRACTS, entry.name)
-    const record = JSON.parse(await fs.readFile(file, 'utf8'))
+    let record
+    try {
+      record = JSON.parse(await fs.readFile(file, 'utf8'))
+    } catch (err) {
+      console.error(`[synthesize] skipping corrupt extract cache ${entry.name}: ${err.message}`)
+      continue
+    }
     if (record.status !== 'extracted_for_note' || !record.text_path) continue
     const textFile = path.join(EXTRACTS, record.text_path)
     const text = await fs.readFile(textFile, 'utf8').catch(() => '')
@@ -338,8 +345,7 @@ function atomPrompt(cluster, sources) {
 
 Return ONLY JSON matching the schema.
 
-MATERIAL:
-${text}`
+${fenceUntrusted('MATERIAL', text)}`
 }
 
 async function atomizeCluster(cluster, sources) {
@@ -348,8 +354,10 @@ async function atomizeCluster(cluster, sources) {
   return atoms.filter(a => a && a.title && a.what).slice(0, MAX_ATOMS)
 }
 
-function atomFingerprint(atom) {
-  const key = [atom.title, ...(atom.sources || []).slice().sort()].join('|')
+function atomFingerprint(atom, clusterId = '') {
+  // clusterId scopes the hash so identical titles in different clusters (common
+  // for sourceless low-confidence atoms) get distinct filenames, not silent skips.
+  const key = [clusterId, atom.title, ...(atom.sources || []).slice().sort()].join('|')
   return crypto.createHash('sha1').update(key).digest('hex').slice(0, 10)
 }
 
@@ -359,7 +367,7 @@ function makeAtomNote(cluster, atom, verdict) {
   const sourceLines = srcs.length
     ? srcs.map(u => `- ${hostOf(u) || 'Source'}: ${u}`).join('\n')
     : '- No public source detected; external verification required before operational adoption.'
-  const fp = atomFingerprint(atom)
+  const fp = atomFingerprint(atom, cluster.id)
   const v = verdict || { status: 'unknown', note: '' }
   const isVerified = v.status === 'verified'
   return `---
@@ -441,7 +449,7 @@ for (const cluster of clusters.values()) {
         const atoms = await atomizeCluster(part, sources)
         let wroteAtom = false
         for (const atom of atoms) {
-          const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom)}.md`)
+          const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
           if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
           // --deep also runs the network+LLM verify gate; otherwise local structural verdict.
           const verdict = DEEP
@@ -473,4 +481,7 @@ for (const cluster of clusters.values()) {
   }
 }
 
-console.log(JSON.stringify({ ok: true, records: records.length, clusters: clusters.size, written, atomized, skipped }, null, 2))
+// degraded: --deep was requested but the deep path could not run (codex absent),
+// so the run silently fell back to local templates. Callers can detect this.
+const degraded = DEEP && !codexAvailable()
+console.log(JSON.stringify({ ok: true, degraded, records: records.length, clusters: clusters.size, written, atomized, skipped }, null, 2))
