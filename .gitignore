@@ -21,8 +21,13 @@ reports/*
 graphify-out/
 *.log
 
+# Internal audit/plan docs (local vault paths + project names; not public).
+docs/PLAN-*.md
+
 # Private/generated vault maintenance waves. They may contain local vault paths,
 # project names, or one-off migration content and must not ship publicly.
+# Archived one-shot waves (moved out of the active scripts/ surface).
+scripts/_archive/
 scripts/mnemazine-*-wave.mjs
 scripts/mnemazine-apply-capability-links.mjs
 scripts/mnemazine-audit-live-vault.mjs
