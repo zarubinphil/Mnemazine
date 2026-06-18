@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
+import { codexAvailable, codexJson } from './mnemazine-codex.mjs'
+import { verifyLocal, verifyDeep } from './mnemazine-verify.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -15,6 +18,11 @@ const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join
 const EXTRACTS = path.resolve(arg('extracts', process.env.MNEMAZINE_EXTRACTS || path.join(ROOT, '.mnemazine/cache/extracted')))
 const SESSION = arg('session', new Date().toISOString().slice(0, 10))
 const MIN_CLUSTER_CHARS = Number(arg('min-cluster-chars', '80'))
+// --deep / --atomize: LLM-split one cluster into many focused atoms (README:50).
+// Default off — the conservative path (release demo, run.mjs) stays local-only
+// and never needs codex. Flag also honoured via MNEMAZINE_DEEP=1.
+const DEEP = argv.includes('--deep') || argv.includes('--atomize') || process.env.MNEMAZINE_DEEP === '1'
+const MAX_ATOMS = Number(arg('max-atoms', process.env.MNEMAZINE_MAX_ATOMS || '20'))
 
 const sourceHints = [
   { re: /mcp|model context protocol|filesystem mcp|memory mcp|zapier/i, name: 'Model Context Protocol docs', url: 'https://modelcontextprotocol.io/docs/getting-started/intro' },
@@ -118,6 +126,16 @@ function slugify(value) {
 
 function uniq(values) {
   return [...new Set(values.filter(Boolean))]
+}
+
+// Content fingerprint = stable hash of a cluster's sorted source refs. Same
+// inputs -> same fingerprint -> same filename, so re-runs are idempotent and
+// exact-duplicate clusters are not rewritten (see write loop skip).
+// ponytail: exact-dup only via source-ref hash; near-duplicate (paraphrase)
+// dedup needs embeddings — wire fastembed/Ollama here if dup clusters appear.
+function fingerprint(cluster) {
+  const refs = cluster.records.map(record => String(record.source_ref || '')).sort()
+  return crypto.createHash('sha1').update(refs.join(' ')).digest('hex').slice(0, 10)
 }
 
 function extractUrls(text) {
@@ -226,6 +244,7 @@ function makeNote(cluster) {
     ? sources.map(source => `- ${source.name}: ${source.url}`)
     : ['- No public source detected in extraction; external verification required before operational adoption.']
   const sourceStatus = sources.length ? 'local synthesis with public source expansion' : 'local synthesis; external verification required'
+  const localVerdict = verifyLocal(sources.map(s => s.url))
   const risk = sources.length
     ? 'Public links were detected or added by topic hints, but claims still need project-specific validation before adoption.'
     : 'No public source was available in extracted text; treat this as a local memory atom, not an externally verified claim.'
@@ -234,9 +253,12 @@ title: "${title.replace(/"/g, '\\"')}"
 type: "knowledge-note"
 source_type: "synthesis-cluster"
 source_ref: "session:${SESSION}/${cluster.id}"
-verified: "${sourceStatus}"
-status: "final"
+verified: false
+verification_status: "${localVerdict.status}"
+verification: "${sourceStatus}"
+status: "draft"
 cluster_size: ${cluster.records.length}
+cluster_fingerprint: "${fingerprint(cluster)}"
 ---
 
 # ${title}
@@ -269,8 +291,9 @@ ${sourceLines.join('\n')}
 
 ## Verification
 
-- Status: ${sourceStatus}.
-- Confidence: medium for workflow direction; low for dates, prices, stars, security claims, and release status until checked against primary sources.
+- **No automated fact-check ran.** This note is an unverified synthesis cluster (\`status: draft\`). Source URLs are detected from extracted text or added by topic hints — they are pointers, not confirmation that any specific claim is true.
+- Promote to \`status: final\` only after a human or the verify gate checks claims against the listed primary sources.
+- Confidence: low until verified — treat dates, prices, stars, security claims, and release status as unconfirmed.
 - Risk: ${risk}
 
 ## Related Notes
@@ -284,6 +307,111 @@ ${sourceLines.join('\n')}
 `
 }
 
+const ATOM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['atoms'],
+  properties: {
+    atoms: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'what', 'why', 'how', 'next', 'sources'],
+        properties: {
+          title: { type: 'string' },
+          what: { type: 'string' },
+          why: { type: 'string' },
+          how: { type: 'array', items: { type: 'string' } },
+          next: { type: 'string' },
+          sources: { type: 'array', items: { type: 'string' } }
+        }
+      }
+    }
+  }
+}
+
+function atomPrompt(cluster, sources) {
+  const text = cluster.records.map(r => compact(r.text, 4000)).join('\n---\n').slice(0, 24000)
+  const urls = sources.map(s => s.url).join(', ') || 'none detected'
+  return `You are Mnemazine's atomization agent. Split the raw material below into FOCUSED, atomic knowledge notes — one idea per atom, up to ${MAX_ATOMS}. Do NOT merge unrelated ideas; do NOT invent facts not present in the material. Each atom: a precise title, a one-paragraph "what", a one-paragraph "why it matters", 2-5 concrete "how to use" bullets, one "next action", and the subset of source URLs that support it (from: ${urls}; [] if none).
+
+Return ONLY JSON matching the schema.
+
+MATERIAL:
+${text}`
+}
+
+async function atomizeCluster(cluster, sources) {
+  const result = await codexJson(atomPrompt(cluster, sources), ATOM_SCHEMA)
+  const atoms = Array.isArray(result?.atoms) ? result.atoms : []
+  return atoms.filter(a => a && a.title && a.what).slice(0, MAX_ATOMS)
+}
+
+function atomFingerprint(atom) {
+  const key = [atom.title, ...(atom.sources || []).slice().sort()].join('|')
+  return crypto.createHash('sha1').update(key).digest('hex').slice(0, 10)
+}
+
+function makeAtomNote(cluster, atom, verdict) {
+  const how = (atom.how || []).filter(Boolean).map(h => `- ${compact(h, 240)}`).join('\n') || '- Review and apply in context.'
+  const srcs = (atom.sources || []).filter(Boolean)
+  const sourceLines = srcs.length
+    ? srcs.map(u => `- ${hostOf(u) || 'Source'}: ${u}`).join('\n')
+    : '- No public source detected; external verification required before operational adoption.'
+  const fp = atomFingerprint(atom)
+  const v = verdict || { status: 'unknown', note: '' }
+  const isVerified = v.status === 'verified'
+  return `---
+title: "${String(atom.title).replace(/"/g, '\\"').slice(0, 120)}"
+type: "knowledge-note"
+source_type: "synthesis-atom"
+source_ref: "session:${SESSION}/${cluster.id}#${fp}"
+verified: ${isVerified}
+verification_status: "${v.status}"
+verification: "llm-atomized; ${String(v.note || 'sources unverified').replace(/"/g, "'")}"
+status: "${isVerified ? 'final' : 'draft'}"
+cluster_id: "${cluster.id}"
+cluster_fingerprint: "${fp}"
+---
+
+# ${compact(atom.title, 120)}
+
+## What This Is
+
+${compact(atom.what, 1200)}
+
+## Why It Matters
+
+${compact(atom.why, 1200)}
+
+## How To Use It
+
+${how}
+
+## Source
+
+${sourceLines}
+
+## Verification
+
+- Verification status: **${v.status}**${v.note ? ` (${v.note})` : ''}.
+${isVerified
+  ? `- A deep verify pass cross-checked the claim against the listed sources.${v.evidence ? ` Evidence: ${compact(v.evidence, 300)}` : ''}`
+  : '- **No claim-level fact-check confirmed this.** Source URLs are pointers, not confirmation. Promote to `verified` only after the deep verify gate (`--deep`) checks claims against the listed sources.'}
+- ${v.status === 'unknown' ? 'No source URL was anchored — treat as a local memory atom, not an externally verified claim.' : 'Confidence: medium until a human or deep verify confirms.'}
+
+## Related Notes
+
+- [[Mnemazine Protocol]]
+- [[${clusterTitle(cluster.id)}]]
+
+## Reuse
+
+- Next action: ${compact(atom.next, 240) || 'Review and apply.'}
+`
+}
+
 await fs.mkdir(path.join(VAULT, '01 Concepts'), { recursive: true })
 const records = await listRecords()
 const clusters = new Map()
@@ -294,17 +422,55 @@ for (const record of records) {
 }
 
 let written = 0
+let skipped = 0
+let atomized = 0
+const useAtomize = DEEP && codexAvailable()
+if (DEEP && !codexAvailable()) {
+  console.error('[synthesize] --deep requested but codex unavailable; falling back to local template synthesis')
+}
 for (const cluster of clusters.values()) {
   const parts = chunks(cluster.records, 25)
   for (let index = 0; index < parts.length; index += 1) {
     const part = { ...cluster, records: parts[index], part: index + 1, partCount: parts.length }
     const textSize = part.records.reduce((sum, record) => sum + compact(record.text, 100000).length, 0)
     if (textSize < MIN_CLUSTER_CHARS) continue
+
+    if (useAtomize) {
+      try {
+        const sources = publicSources(part.records.map(r => r.text).join('\n\n'))
+        const atoms = await atomizeCluster(part, sources)
+        let wroteAtom = false
+        for (const atom of atoms) {
+          const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom)}.md`)
+          if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
+          // --deep also runs the network+LLM verify gate; otherwise local structural verdict.
+          const verdict = DEEP
+            ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
+            : verifyLocal(atom.sources)
+          await fs.writeFile(out, makeAtomNote(part, atom, verdict), 'utf8')
+          atomized += 1
+          wroteAtom = true
+        }
+        if (wroteAtom) continue // atomized this cluster — skip the template note
+        console.error(`[synthesize] atomize produced no atoms for cluster ${cluster.id}; using template note`)
+      } catch (err) {
+        console.error(`[synthesize] atomize failed for cluster ${cluster.id}: ${err.message}; using template note`)
+      }
+    }
+
     const suffix = parts.length > 1 ? `-part-${index + 1}` : ''
-    const out = path.join(VAULT, '01 Concepts', `${SESSION}-synthesis-${slugify(clusterTitle(cluster.id))}${suffix}.md`)
+    // Filename keyed by content fingerprint, not date: idempotent across runs
+    // and never clobbers a same-day note or a manual edit. Identical cluster
+    // content -> identical path -> skipped instead of duplicated/overwritten.
+    const fp = fingerprint(part)
+    const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(clusterTitle(cluster.id))}${suffix}-${fp}.md`)
+    if (await fs.access(out).then(() => true).catch(() => false)) {
+      skipped += 1
+      continue
+    }
     await fs.writeFile(out, makeNote(part), 'utf8')
     written += 1
   }
 }
 
-console.log(JSON.stringify({ ok: true, records: records.length, clusters: clusters.size, written }, null, 2))
+console.log(JSON.stringify({ ok: true, records: records.length, clusters: clusters.size, written, atomized, skipped }, null, 2))
