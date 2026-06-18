@@ -17,6 +17,10 @@ const VIDEO_FRAMES = path.join(ROOT, '.mnemazine/cache/video-frames')
 const VIDEO_QUEUE = path.join(ROOT, '.mnemazine/cache/video-queue.jsonl')
 const EXTRACTS = process.env.MNEMAZINE_EXTRACTS || path.join(ROOT, '.mnemazine/cache/extracted')
 const SYNTHESIZE = process.env.MNEMAZINE_SYNTHESIZE !== '0'
+// Opt-in deep stage (atomization + web/LLM verification, README:230 pipeline).
+// Default OFF: the runner stays conservative — local only, no external calls.
+// Enable with `--deep` or MNEMAZINE_DEEP=1; forwarded to synthesize.
+const DEEP = process.argv.includes('--deep') || process.env.MNEMAZINE_DEEP === '1'
 const WHISPER_MODEL = process.env.MNEMAZINE_WHISPER_MODEL || ''
 const WHISPER_LANGUAGE = process.env.MNEMAZINE_WHISPER_LANGUAGE || 'ru'
 const VIDEO_FRAME_LIMIT = Number(process.env.MNEMAZINE_VIDEO_FRAME_LIMIT || '8')
@@ -302,7 +306,11 @@ async function main() {
   }
   await fs.writeFile(CACHE, JSON.stringify(cache, null, 2), 'utf8')
   if (SYNTHESIZE) {
-    const synth = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-synthesize.mjs')], { stdio: 'inherit', env: process.env })
+    // Stages: extraction+understanding already done above; synthesize runs
+    // research/verification/atomization (deep) and writes vault atoms.
+    const synthArgs = [path.join(ROOT, 'scripts/mnemazine-synthesize.mjs')]
+    if (DEEP) synthArgs.push('--deep')
+    const synth = spawnSync(process.execPath, synthArgs, { stdio: 'inherit', env: process.env })
     if (synth.status !== 0) process.exit(synth.status || 1)
   }
   const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs')], { stdio: 'inherit', env: process.env })
@@ -312,7 +320,7 @@ async function main() {
   if (spawnSync('graphify', ['--version'], { encoding: 'utf8' }).status === 0) {
     spawnSync('graphify', ['update', VAULT], { stdio: 'inherit' })
   }
-  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, archived: archived.length, vault: VAULT }, null, 2))
+  console.log(JSON.stringify({ inbox: entries.length, processed, cached_only: cachedOnly, archived: archived.length, deep: DEEP, vault: VAULT }, null, 2))
 }
 
 main().catch(err => {
