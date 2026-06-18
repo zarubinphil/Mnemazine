@@ -3,7 +3,7 @@
 Mnemazine has two operating modes:
 
 - **Conservative (default):** local-only. No network, no LLM, no external services. This is what `node scripts/mnemazine-run.mjs` and `npm run synthesize` do by default.
-- **Deep (opt-in):** uses a local Codex agent to atomize one source into many focused notes (README "one source → ~20 notes") and to verify claims against their sources.
+- **Deep (opt-in):** uses an LLM agent (Claude by default, Codex at parity) to atomize one source into many focused notes (README "one source → ~20 notes") and to verify claims against their sources.
 
 Deep mode is **off unless you ask for it**. Nothing in the default pipeline reaches the network or an LLM.
 
@@ -19,9 +19,9 @@ MNEMAZINE_DEEP=1 node scripts/mnemazine-run.mjs
 npm run synthesize -- --deep
 ```
 
-If deep mode is requested but Codex is not available, the run **falls back to local template synthesis** and reports `degraded: true` in its JSON output. It never fails silently.
+If deep mode is requested but no LLM engine is available, the run **falls back to local template synthesis** and reports `degraded: true` in its JSON output. It never fails silently.
 
-## The Codex bridge
+## The LLM bridge
 
 All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). The **code-first engine is Claude** (headless `claude -p`); **Codex is kept at parity** — the same contract, so anything that works via Claude also works via Codex. There is no third LLM client. `mnemazine-codex.mjs` remains as a thin back-compat shim.
 
@@ -48,7 +48,7 @@ After Graphify, `scripts/mnemazine-digest.mjs` (`npm run digest`) writes a human
 
 ### Atomization (G4)
 
-`scripts/mnemazine-synthesize.mjs` (with `--deep`/`--atomize`) sends each source cluster to Codex and asks for focused atoms — each with a title, what/why, how-to bullets, a next action, and the supporting source URLs. Each atom becomes its own note. Filenames are content-fingerprinted (scoped by cluster id) so re-runs are idempotent and never clobber an existing note.
+`scripts/mnemazine-synthesize.mjs` (with `--deep`/`--atomize`) sends each source cluster to the LLM and asks for focused atoms — each with a title, what/why, how-to bullets, a next action, and the supporting source URLs. Each atom becomes its own note. Filenames are content-fingerprinted (scoped by cluster id) so re-runs are idempotent and never clobber an existing note.
 
 ### Verification (G5)
 
@@ -56,21 +56,21 @@ After Graphify, `scripts/mnemazine-digest.mjs` (`npm run digest`) writes a human
 
 - `unknown` — no source URL anchored the claim;
 - `assumed` — a source URL is present but was not fetched/checked (the **default local** verdict, zero network);
-- `verified` — only under `--deep`: the source was reachable (HEAD/GET) **and** a Codex web cross-check judged it to support the claim. Such notes get `verified: true` and `status: final`.
+- `verified` — only under `--deep`: the source was reachable (HEAD/GET) **and** an LLM web cross-check judged it to support the claim. Such notes get `verified: true` and `status: final`.
 
 ## Security
 
 ### Untrusted input is fenced
 
-Extracted material (OCR, transcripts, scraped web text) is **untrusted**. Before it is placed into any Codex prompt it is wrapped by `fenceUntrusted()` — an inert-data delimiter plus an explicit instruction that the content must never be executed as commands. Any literal occurrence of the fence sentinel inside the content is neutralized. This is the primary defense against prompt injection through captured material.
+Extracted material (OCR, transcripts, scraped web text) is **untrusted**. Before it is placed into any LLM prompt it is wrapped by `fenceUntrusted()` — an inert-data delimiter plus an explicit instruction that the content must never be executed as commands. Any literal occurrence of the fence sentinel inside the content is neutralized. This is the primary defense against prompt injection through captured material.
 
 ### Sandbox
 
-The Codex calls run headless with the same bypass flag the repo's existing `kb-*-codex.sh` pipeline uses (non-interactive execution needs it). The prompt-layer fencing above is the active mitigation. Tightening the Codex sandbox further is a deliberate, separate decision — not required for default (conservative) operation, which never invokes Codex at all.
+The Claude backend runs `claude -p` without `--dangerously-skip-permissions`; unpermitted tools simply do not run. The Codex backend runs headless with the bypass flag the repo's `kb-*-codex.sh` pipeline uses (non-interactive execution needs it). Either way the prompt-layer fencing above is the active mitigation, and tightening a backend sandbox further is a deliberate, separate decision — not required for default (conservative) operation, which never invokes Codex at all.
 
 ### Data boundary
 
-Deep verification (`--deep`) sends claim text and source URLs to Codex, which performs web search — so locally-derived text reaches external search services **only under `--deep`**. The conservative default never does this.
+Deep verification (`--deep`) sends claim text and source URLs to the LLM agent, which performs web search — so locally-derived text reaches external search services **only under `--deep`**. The conservative default never does this.
 
 ### Local secret scan
 
