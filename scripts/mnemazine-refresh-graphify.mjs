@@ -182,6 +182,22 @@ async function restoreBackup(backupDir) {
   await copyDir(backupDir, GRAPHIFY_OUT)
 }
 
+// Keep only the newest GRAPHIFY_BACKUPS_KEEP graphify-out-backup-* dirs.
+// Names are ISO timestamps, so lexical sort == chronological. Without this the
+// backups accumulate forever inside the vault (10 dirs x ~60MB observed).
+// ponytail: keep `keep` to allow restore/rollback; tune via env, never 0.
+const GRAPHIFY_BACKUPS_KEEP = Math.max(1, Number(process.env.MNEMAZINE_GRAPHIFY_BACKUPS_KEEP || '3'))
+async function pruneBackups(keep = GRAPHIFY_BACKUPS_KEEP) {
+  const entries = await fs.readdir(VAULT, { withFileTypes: true }).catch(() => [])
+  const backups = entries
+    .filter(entry => entry.isDirectory() && entry.name.startsWith('graphify-out-backup-'))
+    .map(entry => entry.name)
+    .sort()
+  for (const name of backups.slice(0, Math.max(0, backups.length - keep))) {
+    await removeIfExists(path.join(VAULT, name))
+  }
+}
+
 async function writeNeedsUpdate() {
   await ensureGraphifyOut()
   await fs.writeFile(NEEDS_UPDATE_PATH, '1', 'utf8')
@@ -426,6 +442,7 @@ async function mergeSemanticGraph(semanticGraphPath) {
 async function semanticRefresh({ baseline }) {
   const backupDir = path.join(VAULT, `graphify-out-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`)
   await copyDir(GRAPHIFY_OUT, backupDir)
+  await pruneBackups()
 
   const selected = await pickSemanticModel()
   if (!selected.ok) {
