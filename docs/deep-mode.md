@@ -36,7 +36,16 @@ All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.
 | `MNEMAZINE_DEEP` | unset | `1` enables deep mode (enrich + atomize + verify + digest). |
 | `MNEMAZINE_ENRICH` | `1` within deep | `0` (or `--no-enrich`) skips the enrichment stage. |
 | `MNEMAZINE_MAX_ATOMS` | `20` | Cap on atoms produced per source cluster. |
+| `MNEMAZINE_CONCURRENCY` | `4` | Swarm size for deep research (parallel agents, bounded). |
 | `MNEMAZINE_OWNER_CONTEXT` | generic | Personal project context for the digest's "why it matters". Or put it in the gitignored `.mnemazine/owner-context.txt`. |
+
+### Recognition (local-first, LLM fallback)
+
+Extraction tries local engines first at **0 tokens**: Apple Vision OCR (images), markitdown (PDF/DOCX/PPTX/XLSX/HTML), whisper + frame OCR (video). Only when local yields nothing usable **and** `--deep` is on does a vision-capable LLM transcribe the file. Each file is isolated — one recognition failure logs an error, leaves the file in inbox, and never breaks the rest of the batch.
+
+### Swarm
+
+In deep mode, files/clusters are researched concurrently by a bounded pool of agents (`MNEMAZINE_CONCURRENCY`, default 4) — cheap and fast. A failing task never blocks the others.
 
 ### Enrichment (knowledge expansion)
 

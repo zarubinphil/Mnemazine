@@ -479,64 +479,80 @@ const useAtomize = DEEP && llmAvailable()
 if (DEEP && !llmAvailable()) {
   console.error('[synthesize] --deep requested but LLM unavailable; falling back to local template synthesis')
 }
+// Bounded-concurrency pool — the research swarm. Each part is an independent
+// agent task; one failing never blocks the others (each is try/caught inside).
+async function mapLimit(items, limit, fn) {
+  let i = 0
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx]) }
+  })
+  await Promise.all(workers)
+}
+
+async function processPart(part, parts, index) {
+  if (useAtomize) {
+    try {
+      const sources = publicSources(part.records.map(r => r.text).join('\n\n'))
+      // Expand the knowledge first (research), then atomize the EXPANDED material.
+      let material
+      if (ENRICH) {
+        try {
+          const { enriched, addedSources } = await enrichCluster(part, sources)
+          if (enriched && enriched.length > 200) {
+            material = enriched
+            for (const u of addedSources) if (!sources.some(s => s.url === u)) sources.push({ name: hostOf(u) || 'Source', url: u })
+            enriched_clusters += 1
+          }
+        } catch (err) {
+          console.error(`[synthesize] enrich failed for cluster ${part.id}: ${err.message}; atomizing raw capture`)
+        }
+      }
+      const atoms = await atomizeCluster(part, sources, material)
+      let wroteAtom = false
+      for (const atom of atoms) {
+        const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
+        if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
+        const verdict = DEEP
+          ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
+          : verifyLocal(atom.sources)
+        await fs.writeFile(out, makeAtomNote(part, atom, verdict), 'utf8')
+        atomized += 1
+        wroteAtom = true
+      }
+      if (wroteAtom) return // atomized this cluster — skip the template note
+      console.error(`[synthesize] atomize produced no atoms for cluster ${part.id}; using template note`)
+    } catch (err) {
+      console.error(`[synthesize] atomize failed for cluster ${part.id}: ${err.message}; using template note`)
+    }
+  }
+
+  const suffix = parts.length > 1 ? `-part-${index + 1}` : ''
+  // Filename keyed by content fingerprint, not date: idempotent across runs.
+  const fp = fingerprint(part)
+  const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(clusterTitle(part.id))}${suffix}-${fp}.md`)
+  if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; return }
+  await fs.writeFile(out, makeNote(part), 'utf8')
+  written += 1
+}
+
+const tasks = []
 for (const cluster of clusters.values()) {
   const parts = chunks(cluster.records, 25)
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = { ...cluster, records: parts[index], part: index + 1, partCount: parts.length }
+  parts.forEach((recs, index) => {
+    const part = { ...cluster, records: recs, part: index + 1, partCount: parts.length }
     const textSize = part.records.reduce((sum, record) => sum + compact(record.text, 100000).length, 0)
-    if (textSize < MIN_CLUSTER_CHARS) continue
-
-    if (useAtomize) {
-      try {
-        const sources = publicSources(part.records.map(r => r.text).join('\n\n'))
-        // Expand the knowledge first (research), then atomize the EXPANDED material.
-        let material
-        if (ENRICH) {
-          try {
-            const { enriched, addedSources } = await enrichCluster(part, sources)
-            if (enriched && enriched.length > 200) {
-              material = enriched
-              for (const u of addedSources) if (!sources.some(s => s.url === u)) sources.push({ name: hostOf(u) || 'Source', url: u })
-              enriched_clusters += 1
-            }
-          } catch (err) {
-            console.error(`[synthesize] enrich failed for cluster ${cluster.id}: ${err.message}; atomizing raw capture`)
-          }
-        }
-        const atoms = await atomizeCluster(part, sources, material)
-        let wroteAtom = false
-        for (const atom of atoms) {
-          const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
-          if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
-          // --deep also runs the network+LLM verify gate; otherwise local structural verdict.
-          const verdict = DEEP
-            ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
-            : verifyLocal(atom.sources)
-          await fs.writeFile(out, makeAtomNote(part, atom, verdict), 'utf8')
-          atomized += 1
-          wroteAtom = true
-        }
-        if (wroteAtom) continue // atomized this cluster — skip the template note
-        console.error(`[synthesize] atomize produced no atoms for cluster ${cluster.id}; using template note`)
-      } catch (err) {
-        console.error(`[synthesize] atomize failed for cluster ${cluster.id}: ${err.message}; using template note`)
-      }
-    }
-
-    const suffix = parts.length > 1 ? `-part-${index + 1}` : ''
-    // Filename keyed by content fingerprint, not date: idempotent across runs
-    // and never clobbers a same-day note or a manual edit. Identical cluster
-    // content -> identical path -> skipped instead of duplicated/overwritten.
-    const fp = fingerprint(part)
-    const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(clusterTitle(cluster.id))}${suffix}-${fp}.md`)
-    if (await fs.access(out).then(() => true).catch(() => false)) {
-      skipped += 1
-      continue
-    }
-    await fs.writeFile(out, makeNote(part), 'utf8')
-    written += 1
-  }
+    if (textSize < MIN_CLUSTER_CHARS) return
+    tasks.push({ part, parts, index })
+  })
 }
+// Swarm only helps when each task spawns an agent (deep); local template writes
+// stay serial. Cap concurrency so we are cheap+fast, not a fork bomb.
+const CONCURRENCY = Number(arg('concurrency', process.env.MNEMAZINE_CONCURRENCY || '4'))
+await mapLimit(tasks, useAtomize ? CONCURRENCY : 1, async ({ part, parts, index }) => {
+  // Outer guard: a part must never break the swarm, even on an unexpected throw.
+  try { await processPart(part, parts, index) }
+  catch (err) { console.error(`[synthesize] part failed for cluster ${part.id}: ${err.message}`) }
+})
 
 // degraded: --deep was requested but the deep path could not run (codex absent),
 // so the run silently fell back to local templates. Callers can detect this.

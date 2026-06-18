@@ -5,10 +5,27 @@
 //   provider: MNEMAZINE_LLM = 'claude' (default) | 'codex'
 // Both run as schema-instructed, web-capable headless agents. Default pipeline
 // never calls either — only the opt-in --deep path does.
-import { spawnSync } from 'node:child_process'
+import { spawnSync, spawn } from 'node:child_process'
 import { existsSync, readdirSync, promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+
+// Async process runner — non-blocking (unlike spawnSync), so many agent calls
+// can run concurrently as a swarm. Never rejects; returns a status/out/err.
+function runProc(bin, args, { input, timeoutMs, cwd } = {}) {
+  return new Promise(resolve => {
+    let child
+    try { child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] }) }
+    catch (e) { return resolve({ status: 1, stdout: '', stderr: String(e.message) }) }
+    let out = '', err = '', killed = false
+    const t = timeoutMs ? setTimeout(() => { killed = true; child.kill('SIGKILL') }, timeoutMs) : null
+    child.stdout.on('data', d => { out += d })
+    child.stderr.on('data', d => { err += d })
+    child.on('error', e => { if (t) clearTimeout(t); resolve({ status: 1, stdout: out, stderr: String(e.message) }) })
+    child.on('close', code => { if (t) clearTimeout(t); resolve({ status: killed ? 124 : (code ?? 1), stdout: out, stderr: err }) })
+    if (input != null) { child.stdin.on('error', () => {}); child.stdin.write(input); child.stdin.end() }
+  })
+}
 
 const DEFAULT_PROVIDER = process.env.MNEMAZINE_LLM || 'claude'
 const TIMEOUT_MS = Number(process.env.MNEMAZINE_LLM_TIMEOUT_MS || '420000')
@@ -95,11 +112,11 @@ async function codexJsonCall(prompt, schema, opts) {
   await fs.writeFile(schemaFile, JSON.stringify(schema), { encoding: 'utf8', mode: 0o600 })
   await fs.writeFile(promptFile, prompt, { encoding: 'utf8', mode: 0o600 })
   try {
-    const res = spawnSync(CODEX_BIN, [
+    const res = await runProc(CODEX_BIN, [
       'exec', '-C', cwd, '--skip-git-repo-check',
       '--dangerously-bypass-approvals-and-sandbox',
       '--output-schema', schemaFile, '-o', outFile, '-'
-    ], { input: await fs.readFile(promptFile, 'utf8'), encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS })
+    ], { input: await fs.readFile(promptFile, 'utf8'), timeoutMs: opts.timeoutMs || TIMEOUT_MS })
     if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
     const raw = await fs.readFile(outFile, 'utf8').catch(() => '')
     if (!raw.trim()) throw new Error('codex returned empty output')
@@ -122,7 +139,7 @@ async function claudeJsonCall(prompt, schema, opts) {
   const full = `${prompt}\n\nReturn ONLY a single JSON object matching this JSON Schema (no prose, no code fence):\n${JSON.stringify(schema)}`
   const args = ['-p', '--output-format', 'json']
   if (tools.length) args.push('--allowedTools', tools.join(','))
-  const res = spawnSync(bin, args, { input: full, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+  const res = await runProc(bin, args, { input: full, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
   if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
   // --output-format json wraps the turn: { type:'result', result:'<text>', ... }
   let envelope
@@ -146,10 +163,10 @@ export async function llmText(prompt, opts = {}) {
   const provider = activeProvider(opts)
   if (provider === 'codex') {
     if (!binExists(CODEX_BIN)) throw new Error(`codex binary not found: ${CODEX_BIN}`)
-    const res = spawnSync(CODEX_BIN, [
+    const res = await runProc(CODEX_BIN, [
       'exec', '-C', opts.cwd || process.cwd(), '--skip-git-repo-check',
       '--dangerously-bypass-approvals-and-sandbox', '-'
-    ], { input: prompt, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+    ], { input: prompt, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
     if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
     return String(res.stdout || '').trim()
   }
@@ -157,7 +174,7 @@ export async function llmText(prompt, opts = {}) {
   if (!binExists(bin)) throw new Error('claude binary not found: set MNEMAZINE_CLAUDE_BIN')
   const args = ['-p', '--output-format', 'json']
   if (opts.tools?.length) args.push('--allowedTools', opts.tools.join(','))
-  const res = spawnSync(bin, args, { input: prompt, encoding: 'utf8', timeout: opts.timeoutMs || TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+  const res = await runProc(bin, args, { input: prompt, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
   if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
   let envelope
   try { envelope = JSON.parse(res.stdout) } catch { envelope = null }
