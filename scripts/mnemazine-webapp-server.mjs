@@ -102,7 +102,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/run') {
       await fs.mkdir(INBOX, { recursive: true })
-      await fs.writeFile(RUN_FLAG, new Date().toISOString(), 'utf8')
+      // Coalescing trigger (many taps → one run) with a who/when audit trail.
+      // ponytail: a flag, not a job queue — single user, single button.
+      await fs.writeFile(RUN_FLAG, JSON.stringify({ at: new Date().toISOString(), by: user.id }), 'utf8')
       return json(res, 200, { ok: true, queued: true })
     }
     return json(res, 404, { error: 'not found' })
