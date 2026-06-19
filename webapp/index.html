@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://telegram.org; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'">
 <title>Mnemazine</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
@@ -89,9 +90,17 @@ async function refresh() {
     const s = await api('status')
     $('count').textContent = s.count
     $('lastrun').textContent = 'последний прогон: ' + (s.lastRun ? fmt(s.lastRun) : 'ещё не было')
-    $('recent').innerHTML = s.recent.length
-      ? s.recent.map(r => `<li><span>${r.name.replace(/^tg_/, '').replace(/\.md$/, '')}</span><span>${fmt(r.at)}</span></li>`).join('')
-      : '<li class="hint">пусто</li>'
+    // Build DOM with textContent — file names come from untrusted Telegram
+    // uploads; innerHTML here would be a stored-XSS sink.
+    const ul = $('recent'); ul.replaceChildren()
+    if (!s.recent.length) {
+      const li = document.createElement('li'); li.className = 'hint'; li.textContent = 'пусто'; ul.append(li)
+    } else for (const r of s.recent) {
+      const li = document.createElement('li')
+      const name = document.createElement('span'); name.textContent = r.name.replace(/^tg_/, '').replace(/\.md$/, '')
+      const at = document.createElement('span'); at.textContent = fmt(r.at)
+      li.append(name, at); ul.append(li)
+    }
   } catch (e) { toast('Ошибка: ' + e.message) }
 }
 

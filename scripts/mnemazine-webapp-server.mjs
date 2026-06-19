@@ -37,6 +37,12 @@ function verifyInitData(initData, token) {
   const calc = crypto.createHmac('sha256', secret).update(dataCheckString).digest('hex')
   // timing-safe compare
   if (calc.length !== hash.length || !crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(hash))) return null
+  // Reject stale initData — a leaked/captured one must not work forever (replay).
+  const ttl = Number(process.env.MNEMAZINE_INITDATA_TTL || 86400)
+  if (ttl > 0) {
+    const authDate = Number(params.get('auth_date'))
+    if (!authDate || (Date.now() / 1000) - authDate > ttl) return null
+  }
   try { return JSON.parse(params.get('user') || 'null') } catch { return null }
 }
 
@@ -104,17 +110,23 @@ async function selftest() {
   // build a valid initData and verify round-trips; tampered fails.
   const tok = 'test:token'
   const user = JSON.stringify({ id: 1, first_name: 'F' })
-  const p = new URLSearchParams({ auth_date: '1', user })
-  const dcs = [...p.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n')
-  const secret = crypto.createHmac('sha256', 'WebAppData').update(tok).digest()
-  const hash = crypto.createHmac('sha256', secret).update(dcs).digest('hex')
-  p.set('hash', hash)
+  const sign = params => {
+    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n')
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(tok).digest()
+    return crypto.createHmac('sha256', secret).update(dcs).digest('hex')
+  }
+  const fresh = String(Math.floor(Date.now() / 1000))
+  const p = new URLSearchParams({ auth_date: fresh, user }); p.set('hash', sign(new URLSearchParams({ auth_date: fresh, user })))
   const ok = verifyInitData(p.toString(), tok)
-  assert(ok && ok.id === 1, 'valid initData accepted')
+  assert(ok && ok.id === 1, 'valid fresh initData accepted')
   assert(verifyInitData(p.toString(), 'wrong:token') === null, 'wrong token rejected')
-  const bad = new URLSearchParams(p); bad.set('auth_date', '2')
+  const bad = new URLSearchParams(p); bad.set('auth_date', String(Number(fresh) + 1))
   assert(verifyInitData(bad.toString(), tok) === null, 'tampered payload rejected')
   assert(verifyInitData('', tok) === null, 'empty rejected')
+  // C7: test from the threat — a correctly-signed but OLD initData must be refused.
+  const staleDate = String(Math.floor(Date.now() / 1000) - 100000)
+  const stale = new URLSearchParams({ auth_date: staleDate, user }); stale.set('hash', sign(new URLSearchParams({ auth_date: staleDate, user })))
+  assert(verifyInitData(stale.toString(), tok) === null, 'stale (replay) initData rejected')
   console.log('selftest ok')
 }
 
