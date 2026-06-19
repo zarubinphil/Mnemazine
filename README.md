@@ -256,6 +256,7 @@ That matters because a real memory must be reproducible. A note should be able t
 - [Token Economics](docs/token-economics.md)
 - [Website Ingestion](docs/site-ingestion.md)
 - [YouTube Ingestion](docs/youtube-ingestion.md)
+- [Telegram Intake (bot + Mini App)](docs/telegram-intake.md)
 - [Obsidian Vault](docs/obsidian.md)
 - [Apple Vision OCR](docs/apple-vision.md)
 - [Graphify](docs/graphify.md)
