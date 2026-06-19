@@ -8,6 +8,8 @@ set -euo pipefail
 REPO="${MNEMAZINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Live host/key/paths live in a gitignored config, never hardcoded here.
 [ -f "$REPO/.mnemazine/config.env" ] && . "$REPO/.mnemazine/config.env"
+# Non-secret personal overrides (e.g. MNEMAZINE_INBOX), gitignored.
+[ -f "$REPO/.mnemazine/config.local.sh" ] && . "$REPO/.mnemazine/config.local.sh"
 VPS="${MNEMAZINE_VPS:-root@YOUR_VPS_HOST}"
 KEY="${MNEMAZINE_VPS_KEY:-$HOME/.ssh/id_rsa}"
 REMOTE_INBOX="${MNEMAZINE_REMOTE_INBOX:-/var/www/mnemazine-inbox}"

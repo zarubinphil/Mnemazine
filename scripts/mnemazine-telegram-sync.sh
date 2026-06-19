@@ -8,11 +8,17 @@ set -euo pipefail
 REPO="${MNEMAZINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Live host/key/paths live in a gitignored config, never hardcoded here.
 [ -f "$REPO/.mnemazine/config.env" ] && . "$REPO/.mnemazine/config.env"
+# Non-secret personal overrides (e.g. MNEMAZINE_INBOX), gitignored.
+[ -f "$REPO/.mnemazine/config.local.sh" ] && . "$REPO/.mnemazine/config.local.sh"
 VPS="${MNEMAZINE_VPS:-root@YOUR_VPS_HOST}"
 KEY="${MNEMAZINE_VPS_KEY:-$HOME/.ssh/id_rsa}"
 REMOTE_INBOX="${MNEMAZINE_REMOTE_INBOX:-/var/www/mnemazine-inbox/}"
-LOCAL_INBOX="$REPO/inbox/"
-STAGING="$REPO/inbox/.staging/"
+# Inbox honours MNEMAZINE_INBOX (from config.env); defaults to repo-local inbox.
+LOCAL_INBOX="${MNEMAZINE_INBOX:-$REPO/inbox}"
+LOCAL_INBOX="${LOCAL_INBOX%/}/"
+STAGING="${LOCAL_INBOX}.staging/"
+# Export so `npm run run` (mnemazine-run.mjs) reads the same inbox.
+export MNEMAZINE_INBOX="${LOCAL_INBOX%/}"
 
 if [ "$VPS" = "root@YOUR_VPS_HOST" ]; then
   echo "Set MNEMAZINE_VPS (and MNEMAZINE_VPS_KEY) in $REPO/.mnemazine/config.env" >&2
