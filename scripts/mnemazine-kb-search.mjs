@@ -33,6 +33,11 @@ const MAX_NOTES = Number(arg('max-notes', '60'))     // candidate cap fed to the
 const SHARD_SIZE = Number(arg('shard-size', '6'))    // notes per agent
 const MAX_SHARDS = Number(arg('max-shards', process.env.MNEMAZINE_SEARCH_MAX_SHARDS || '12')) // deep cost cap: hard limit on agents spawned
 const EXCERPT = 2500                                  // chars of each note shown to an agent
+// 2B perspective-diverse verify: opt-in (extra K agents). Default OFF to keep
+// the token budget tight — enable when groundedness matters. One call per
+// top-K finding, judging 3 lenses at once (grounded/relevant/actionable).
+const VERIFY = argv.includes('--verify') || process.env.MNEMAZINE_SEARCH_VERIFY === '1'
+const MAX_VERIFY = Number(arg('max-verify', '5')) // top-K findings to verify
 
 // --- helpers -----------------------------------------------------------------
 async function walk(dir, out = []) {
@@ -122,30 +127,76 @@ const SYNTH_SCHEMA = {
   }
 }
 
-// --- orchestrator: widen the query (deep only) -------------------------------
-async function widen(topic) {
-  if (!DEEP || !llmAvailable(PROVIDER)) return tokens(topic)
+const VERDICT_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['grounded', 'relevant', 'actionable'],
+  properties: {
+    grounded: { type: 'boolean' }, relevant: { type: 'boolean' },
+    actionable: { type: 'boolean' }, reason: { type: 'string' }
+  }
+}
+
+// --- orchestrator: plan the query (deep only) --------------------------------
+// 2A: one call returns BOTH search terms AND 2-4 facets (the real axes of THIS
+// query). Facets steer 0-token recon routing, shard-agent focus, and synthesis
+// themes — perspective diversity for ~free (no extra agents). Local mode skips
+// it and stays 0-token (facets:[]).
+async function plan(topic) {
+  if (!DEEP || !llmAvailable(PROVIDER)) return { terms: tokens(topic), facets: [] }
   try {
     const out = await llmJson(
-      `Тема поиска по базе знаний: "${topic}". Дай ключевые слова и синонимы (рус+англ) для полнотекстового поиска по заметкам — только список терминов, без объяснений.`,
-      { type: 'object', additionalProperties: false, required: ['terms'], properties: { terms: { type: 'array', items: { type: 'string' } } } },
+      `Тема поиска по базе знаний: "${topic}".
+1) terms: ключевые слова и синонимы (рус+англ) для полнотекстового поиска — плоский список.
+2) facets: 2-4 РЕАЛЬНЫЕ оси/под-вопроса именно этой темы (не общие "плюсы/минусы"). Для каждой: label (короткое имя оси) и terms (свои ключевые слова оси).`,
+      {
+        type: 'object', additionalProperties: false, required: ['terms', 'facets'],
+        properties: {
+          terms: { type: 'array', items: { type: 'string' } },
+          facets: {
+            type: 'array',
+            items: {
+              type: 'object', additionalProperties: false, required: ['label', 'terms'],
+              properties: { label: { type: 'string' }, terms: { type: 'array', items: { type: 'string' } } }
+            }
+          }
+        }
+      },
       { provider: PROVIDER }
     )
     const terms = new Set(tokens(topic))
     for (const t of out.terms || []) for (const w of tokens(t)) terms.add(w)
-    return [...terms]
+    const facets = (out.facets || []).slice(0, 4)
+      .map(f => ({ label: String(f.label || '').trim(), terms: [...new Set((f.terms || []).flatMap(tokens))] }))
+      .filter(f => f.label && f.terms.length)
+    for (const f of facets) for (const w of f.terms) terms.add(w)
+    return { terms: [...terms], facets }
   } catch (e) {
-    console.error(`[kb-search] query widening failed: ${e.message}; using raw terms`)
-    return tokens(topic)
+    console.error(`[kb-search] query planning failed: ${e.message}; using raw terms`)
+    return { terms: tokens(topic), facets: [] }
   }
 }
 
+// Assign a candidate note to its best-matching facet (max facet-term hits).
+// 0-token. Returns facet label or 'Общее' when no facet wins.
+function assignFacet(note, facets) {
+  if (!facets.length) return null
+  const hay = (note.rel + '\n' + note.text).toLowerCase()
+  let best = null, bestN = 0
+  for (const f of facets) {
+    let n = 0
+    for (const t of f.terms) if (hay.includes(t)) n++
+    if (n > bestN) { bestN = n; best = f.label }
+  }
+  return best || 'Общее'
+}
+
 // --- worker: extract findings from one shard ---------------------------------
-async function extractShard(topic, shard) {
+async function extractShard(topic, shard, facet) {
   if (DEEP && llmAvailable(PROVIDER)) {
     const blob = shard.map(n =>
       fenceUntrusted('NOTE', `### ${n.rel}\n${n.text.slice(0, EXCERPT)}`)).join('\n\n')
-    const prompt = `Ты агент-исследователь. Тема: "${topic}".
+    const focus = facet ? `\nФокус-ось этого шарда: «${facet}» — приоритет находкам по этой оси (но не пропускай иное важное по теме).` : ''
+    const prompt = `Ты агент-исследователь. Тема: "${topic}".${focus}
 Из заметок ниже выбери ТОЛЬКО релевантное теме. Для каждой находки: note (путь заметки), source (URL/ссылка из заметки, если есть), insight (1-2 предложения по-русски — что важного для темы), relevance (1-5). Ничего не выдумывай сверх заметок.
 
 ${blob}`
@@ -164,11 +215,35 @@ ${blob}`
   })
 }
 
+// --- verify (2B): perspective-diverse check on the top-K findings ------------
+// One agent per finding, judging 3 lenses at once (grounded/relevant/actionable)
+// against the note's own text. Bounded (K calls). Drops ungrounded findings —
+// the anti-hallucination gate (§6 claim->content). Opt-in via VERIFY.
+async function verifyFindings(topic, findings, textByNote) {
+  if (!VERIFY || !DEEP || !llmAvailable(PROVIDER) || !findings.length) return { kept: findings, dropped: 0 }
+  const top = findings.slice(0, MAX_VERIFY)
+  const rest = findings.slice(MAX_VERIFY)
+  const verdicts = []
+  await mapLimit(top, CONCURRENCY, async (f, idx) => {
+    const note = textByNote.get(f.note) || ''
+    const prompt = `Тема: "${topic}". Находка из заметки «${f.note}»:
+"${f.insight}"
+Оцени по 3 осям относительно текста заметки ниже: grounded (находка реально опирается на текст, не выдумана), relevant (по теме), actionable (полезна на практике). Верни булевы + reason.
+
+${fenceUntrusted('NOTE', note.slice(0, EXCERPT))}`
+    try { verdicts[idx] = await llmJson(prompt, VERDICT_SCHEMA, { provider: PROVIDER, tools: [] }) }
+    catch (e) { console.error(`[kb-search] verify failed for ${f.note}: ${e.message}; keeping finding`); verdicts[idx] = { grounded: true, relevant: true, actionable: true } }
+  })
+  const kept = top.filter((_, i) => verdicts[i]?.grounded !== false).concat(rest)
+  return { kept, dropped: top.length - (kept.length - rest.length) }
+}
+
 // --- orchestrator: synthesize findings into a report -------------------------
-async function synthesize(topic, findings) {
+async function synthesize(topic, findings, facets = []) {
   if (DEEP && llmAvailable(PROVIDER) && findings.length) {
     const blob = findings.map(f => `- [${f.note}] (rel ${f.relevance}) ${f.insight}${f.source ? ` <${f.source}>` : ''}`).join('\n')
-    const prompt = `Ты оркестратор. Собери из находок агентов справку по теме "${topic}" на РУССКОМ, стиль humanizer — живо, ясно, по делу, без воды и канцелярита. Дедуплицируй, сгруппируй по под-темам (themes), отметь связи (connections), противоречия (contradictions), пробелы знаний (gaps) и следующие шаги (next). Не выдумывай сверх находок.
+    const axes = facets.length ? `\nСгруппируй по этим осям темы (themes), в этом порядке: ${facets.map(f => f.label).join(', ')}. Добавь иную ось только если находки не лезут ни в одну.` : ''
+    const prompt = `Ты оркестратор. Собери из находок агентов справку по теме "${topic}" на РУССКОМ, стиль humanizer — живо, ясно, по делу, без воды и канцелярита. Дедуплицируй, сгруппируй по под-темам (themes), отметь связи (connections), противоречия (contradictions), пробелы знаний (gaps) и следующие шаги (next). Не выдумывай сверх находок.${axes}
 
 Находки:
 ${blob}`
@@ -198,7 +273,9 @@ function renderReport(topic, report, meta) {
   const L = []
   L.push(`# Справка: ${topic}`, '')
   L.push(`> Поиск по базе знаний · ${meta.stamp} · просмотрено ${meta.scanned} заметок, отобрано ${meta.candidates}, находок ${meta.findings} · режим: ${meta.deep ? 'рой агентов (deep)' : 'локальный'}`, '')
+  if (meta.facets?.length) L.push(`> Оси разбора: ${meta.facets.join(' · ')}`, '')
   if (meta.droppedNotes) L.push(`> ⚠️ Лимит стоимости: ${meta.droppedNotes} заметок-кандидатов не разобраны (--max-shards). Подними лимит для полного охвата.`, '')
+  if (meta.droppedByVerify) L.push(`> 🔎 Verify: ${meta.droppedByVerify} находок отброшено как необоснованные.`, '')
   L.push('## Главное', '', report.summary || '—', '')
   if (report.themes?.length) {
     L.push('## По под-темам', '')
@@ -219,7 +296,7 @@ function renderReport(topic, report, meta) {
 // --- main --------------------------------------------------------------------
 async function run(topic, vault, outDir) {
   const stamp = new Date().toISOString()
-  const terms = await widen(topic)
+  const { terms, facets } = await plan(topic)
   // RECON
   const files = await walk(vault)
   const scored = []
@@ -232,26 +309,41 @@ async function run(topic, vault, outDir) {
   }
   scored.sort((a, b) => b.score - a.score)
   const candidates = scored.slice(0, MAX_NOTES)
-  // FAN-OUT
-  let shards = []
-  for (let i = 0; i < candidates.length; i += SHARD_SIZE) shards.push(candidates.slice(i, i + SHARD_SIZE))
+  // FAN-OUT — shard within facet groups so each shard carries one focus axis
+  // (2A). No facets (local / planning failed) → flat sharding as before.
+  let shards = []  // each: { notes:[...], facet }
+  if (facets.length) {
+    const groups = new Map()
+    for (const c of candidates) {
+      const f = assignFacet(c, facets)
+      if (!groups.has(f)) groups.set(f, [])
+      groups.get(f).push(c)
+    }
+    for (const [facet, notes] of groups)
+      for (let i = 0; i < notes.length; i += SHARD_SIZE) shards.push({ notes: notes.slice(i, i + SHARD_SIZE), facet })
+  } else {
+    for (let i = 0; i < candidates.length; i += SHARD_SIZE) shards.push({ notes: candidates.slice(i, i + SHARD_SIZE), facet: null })
+  }
   // Cost cap (deep only): fail-closed on the number of agents spawned. Local
   // mode is 0-token, so it is uncapped. Dropped shards are logged, never silent.
   let droppedNotes = 0
   if (DEEP && llmAvailable(PROVIDER) && shards.length > MAX_SHARDS) {
-    droppedNotes = shards.slice(MAX_SHARDS).reduce((n, s) => n + s.length, 0)
+    droppedNotes = shards.slice(MAX_SHARDS).reduce((n, s) => n + s.notes.length, 0)
     console.error(`[kb-search] cost cap: ${shards.length} shards > MNEMAZINE_SEARCH_MAX_SHARDS=${MAX_SHARDS}; dropping ${shards.length - MAX_SHARDS} shards (${droppedNotes} notes). Raise --max-shards to cover more.`)
     shards = shards.slice(0, MAX_SHARDS)
   }
   const findings = []
   await mapLimit(shards, DEEP ? CONCURRENCY : 1, async shard => {
-    try { findings.push(...await extractShard(topic, shard)) }
+    try { findings.push(...await extractShard(topic, shard.notes, shard.facet)) }
     catch (e) { console.error(`[kb-search] shard failed: ${e.message}`) }
   })
   findings.sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+  // VERIFY (2B, opt-in): drop ungrounded top findings before synthesis.
+  const textByNote = new Map(candidates.map(c => [c.rel, c.text]))
+  const { kept, dropped: droppedByVerify } = await verifyFindings(topic, findings, textByNote)
   // FAN-IN
-  const report = await synthesize(topic, findings)
-  const md = renderReport(topic, report, { stamp, scanned: files.length, candidates: candidates.length, findings: findings.length, deep: DEEP && llmAvailable(PROVIDER), droppedNotes })
+  const report = await synthesize(topic, kept, facets)
+  const md = renderReport(topic, report, { stamp, scanned: files.length, candidates: candidates.length, findings: kept.length, deep: DEEP && llmAvailable(PROVIDER), droppedNotes, droppedByVerify, facets: facets.map(f => f.label) })
   await fs.mkdir(outDir, { recursive: true })
   const out = path.join(outDir, `search-${slugify(topic)}-${stamp.slice(0, 10)}-${Date.now()}.md`)
   await fs.writeFile(out, md, 'utf8')

@@ -17,6 +17,7 @@
     "ingest:site": "node scripts/mnemazine-ingest-site.mjs",
     "synthesize": "node scripts/mnemazine-synthesize.mjs",
     "search": "node scripts/mnemazine-kb-search.mjs",
+    "search:eval": "node tests/search-eval.mjs",
     "weekly": "node scripts/mnemazine-weekly-brief-html.mjs",
     "weekly:state": "node scripts/mnemazine-weekly-state.mjs",
     "digest": "node scripts/mnemazine-digest.mjs",
