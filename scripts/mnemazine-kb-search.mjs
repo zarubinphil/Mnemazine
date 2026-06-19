@@ -31,6 +31,7 @@ const PROVIDER = arg('provider', process.env.MNEMAZINE_LLM || 'claude')
 const CONCURRENCY = Number(arg('concurrency', process.env.MNEMAZINE_CONCURRENCY || '4'))
 const MAX_NOTES = Number(arg('max-notes', '60'))     // candidate cap fed to the swarm
 const SHARD_SIZE = Number(arg('shard-size', '6'))    // notes per agent
+const MAX_SHARDS = Number(arg('max-shards', process.env.MNEMAZINE_SEARCH_MAX_SHARDS || '12')) // deep cost cap: hard limit on agents spawned
 const EXCERPT = 2500                                  // chars of each note shown to an agent
 
 // --- helpers -----------------------------------------------------------------
@@ -197,6 +198,7 @@ function renderReport(topic, report, meta) {
   const L = []
   L.push(`# Справка: ${topic}`, '')
   L.push(`> Поиск по базе знаний · ${meta.stamp} · просмотрено ${meta.scanned} заметок, отобрано ${meta.candidates}, находок ${meta.findings} · режим: ${meta.deep ? 'рой агентов (deep)' : 'локальный'}`, '')
+  if (meta.droppedNotes) L.push(`> ⚠️ Лимит стоимости: ${meta.droppedNotes} заметок-кандидатов не разобраны (--max-shards). Подними лимит для полного охвата.`, '')
   L.push('## Главное', '', report.summary || '—', '')
   if (report.themes?.length) {
     L.push('## По под-темам', '')
@@ -231,8 +233,16 @@ async function run(topic, vault, outDir) {
   scored.sort((a, b) => b.score - a.score)
   const candidates = scored.slice(0, MAX_NOTES)
   // FAN-OUT
-  const shards = []
+  let shards = []
   for (let i = 0; i < candidates.length; i += SHARD_SIZE) shards.push(candidates.slice(i, i + SHARD_SIZE))
+  // Cost cap (deep only): fail-closed on the number of agents spawned. Local
+  // mode is 0-token, so it is uncapped. Dropped shards are logged, never silent.
+  let droppedNotes = 0
+  if (DEEP && llmAvailable(PROVIDER) && shards.length > MAX_SHARDS) {
+    droppedNotes = shards.slice(MAX_SHARDS).reduce((n, s) => n + s.length, 0)
+    console.error(`[kb-search] cost cap: ${shards.length} shards > MNEMAZINE_SEARCH_MAX_SHARDS=${MAX_SHARDS}; dropping ${shards.length - MAX_SHARDS} shards (${droppedNotes} notes). Raise --max-shards to cover more.`)
+    shards = shards.slice(0, MAX_SHARDS)
+  }
   const findings = []
   await mapLimit(shards, DEEP ? CONCURRENCY : 1, async shard => {
     try { findings.push(...await extractShard(topic, shard)) }
@@ -241,7 +251,7 @@ async function run(topic, vault, outDir) {
   findings.sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
   // FAN-IN
   const report = await synthesize(topic, findings)
-  const md = renderReport(topic, report, { stamp, scanned: files.length, candidates: candidates.length, findings: findings.length, deep: DEEP && llmAvailable(PROVIDER) })
+  const md = renderReport(topic, report, { stamp, scanned: files.length, candidates: candidates.length, findings: findings.length, deep: DEEP && llmAvailable(PROVIDER), droppedNotes })
   await fs.mkdir(outDir, { recursive: true })
   const out = path.join(outDir, `search-${slugify(topic)}-${stamp.slice(0, 10)}-${Date.now()}.md`)
   await fs.writeFile(out, md, 'utf8')
@@ -259,6 +269,9 @@ async function selftest() {
   assert(md.includes('Справка:'), 'report has header')
   assert(md.includes('harness.md'), 'relevant note surfaced')
   assert(!md.includes('coffee.md'), 'irrelevant note excluded')
+  assert(!md.includes('Лимит стоимости'), 'no cost-cap warning when nothing dropped')
+  const capped = renderReport('x', { summary: 's', themes: [] }, { stamp: 'now', scanned: 1, candidates: 1, findings: 1, deep: true, droppedNotes: 18 })
+  assert(capped.includes('Лимит стоимости') && capped.includes('18'), 'cost-cap warning surfaced when shards dropped')
   await fs.rm(tmp, { recursive: true, force: true })
   console.log('selftest ok')
 }
