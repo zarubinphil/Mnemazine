@@ -19,18 +19,34 @@ if [ "$VPS" = "root@YOUR_VPS_HOST" ]; then
 fi
 SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10"
 MARKER="$REPO/.mnemazine/.last-daily"
+mkdir -p "$REPO/.mnemazine"
 
-run=0
+# Single-flight lock. macOS has no flock, so use an atomic mkdir lock dir.
+# Steal a stale lock (>60 min) left by a killed run.
+LOCK="$REPO/.mnemazine/poll.lock"
+[ -d "$LOCK" ] && find "$LOCK" -maxdepth 0 -mmin +60 -exec rmdir {} \; 2>/dev/null
+if ! mkdir "$LOCK" 2>/dev/null; then exit 0; fi   # previous tick still running
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+run=0; manual=0
 # Consume run-now flag atomically: print + delete in one ssh.
 flag="$($SSH "$VPS" "f=$REMOTE_INBOX/.run-now; if [ -f \"\$f\" ]; then cat \"\$f\"; rm -f \"\$f\"; fi" 2>/dev/null || true)"
-[ -n "$flag" ] && run=1
+[ -n "$flag" ] && { run=1; manual=1; }
 
 today="$(date +%F)"
-if [ "$(cat "$MARKER" 2>/dev/null || true)" != "$today" ] && [ "$(date +%H)" -ge 9 ]; then run=1; fi
+if [ "$(cat "$MARKER" 2>/dev/null || true)" != "$today" ] && [ "$(date +%H)" -ge 9 ]; then
+  run=1
+  # Mark the daily attempt BEFORE syncing: a failed run must not re-fire every
+  # 5 min for the rest of the day (storm). One attempt per day.
+  echo "$today" > "$MARKER"
+fi
 
 [ "$run" -eq 0 ] && exit 0
 
-bash "$REPO/scripts/mnemazine-telegram-sync.sh"
-
-mkdir -p "$(dirname "$MARKER")"; echo "$today" > "$MARKER"
-$SSH "$VPS" "echo $(date -u +%FT%TZ) > $REMOTE_INBOX/.last-run" 2>/dev/null || true
+if bash "$REPO/scripts/mnemazine-telegram-sync.sh"; then
+  $SSH "$VPS" "echo $(date -u +%FT%TZ) > $REMOTE_INBOX/.last-run" 2>/dev/null || true
+else
+  # A manual run-now we already consumed shouldn't vanish on failure — re-queue it.
+  [ "$manual" = "1" ] && $SSH "$VPS" "echo retry > $REMOTE_INBOX/.run-now" 2>/dev/null || true
+  exit 1
+fi

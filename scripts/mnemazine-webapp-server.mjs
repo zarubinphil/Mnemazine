@@ -51,9 +51,15 @@ const json = (res, code, obj) => {
   res.end(JSON.stringify(obj))
 }
 
+const MAX_BODY = 65536 // 64 KB — notes are small; cap guards against OOM.
 async function readBody(req) {
   const chunks = []
-  for await (const c of req) chunks.push(c)
+  let total = 0
+  for await (const c of req) {
+    total += c.length
+    if (total > MAX_BODY) { const e = new Error('payload too large'); e.code = 413; throw e }
+    chunks.push(c)
+  }
   return Buffer.concat(chunks).toString('utf8')
 }
 
@@ -101,7 +107,9 @@ const server = http.createServer(async (req, res) => {
     }
     return json(res, 404, { error: 'not found' })
   } catch (e) {
-    return json(res, 500, { error: e.message })
+    if (e.code === 413) return json(res, 413, { error: 'payload too large' })
+    console.error(`[500] ${e.stack || e.message}`)   // detail to stderr, not the client
+    return json(res, 500, { error: 'internal error' })
   }
 })
 

@@ -28,7 +28,10 @@ ask_choice() {
   local sel
   while true; do
     printf 'Выбери [1-%d]: ' "${#opts[@]}"
-    read -r sel
+    if ! read -r sel; then
+      printf '\nНет TTY (ввод закрыт). Запусти setup.sh интерактивно или используй install.sh без вопросов.\n' >&2
+      exit 1
+    fi
     if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#opts[@]}" ]; then
       REPLY_IDX="$sel"; REPLY_VAL="${opts[$((sel-1))]}"; return 0
     fi
@@ -38,8 +41,8 @@ ask_choice() {
 
 ask_text() { # ask_text "prompt" [silent] -> REPLY_TXT
   local p="$1" silent="${2:-}"
-  if [ "$silent" = "secret" ]; then printf '%s: ' "$p"; read -rs REPLY_TXT; printf '\n'
-  else printf '%s: ' "$p"; read -r REPLY_TXT; fi
+  if [ "$silent" = "secret" ]; then printf '%s: ' "$p"; read -rs REPLY_TXT || { printf '\nНет TTY.\n' >&2; exit 1; }; printf '\n'
+  else printf '%s: ' "$p"; read -r REPLY_TXT || { printf '\nНет TTY.\n' >&2; exit 1; }; fi
 }
 
 run() { # run a command unless dry-run
@@ -133,7 +136,10 @@ fi
 # ---- Stage 6: build the skeleton -------------------------------------------
 stage 6 "Ставлю каркас Mnemazine"
 ok "Запускаю install.sh (vault, папки, venv, OCR-сборка)…"
-MNEMAZINE_ROOT="$ROOT" MNEMAZINE_INBOX="$INBOX" run bash "$ROOT/install.sh"
+if ! MNEMAZINE_ROOT="$ROOT" MNEMAZINE_INBOX="$INBOX" run bash "$ROOT/install.sh"; then
+  no "install.sh завершился с ошибкой — каркас не собран."
+  halt
+fi
 
 # deploy bot if VPS path chosen
 if [ "$BOT_MODE" = "vps" ]; then

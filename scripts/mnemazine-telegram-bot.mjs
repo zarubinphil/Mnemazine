@@ -45,8 +45,15 @@ async function downloadFile(fileId, suggestedName) {
   const url = `${FILE_API}/${f.file_path}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`download ${fileId}: HTTP ${res.status}`)
+  // Cap download size to avoid OOM on a hostile/huge file (Telegram tops ~20 MB).
+  const MAX_FILE = 30 * 1024 * 1024
+  const len = Number(res.headers.get('content-length') || 0)
+  if (len > MAX_FILE) throw new Error(`download ${fileId}: too large (${len} bytes)`)
   const buf = Buffer.from(await res.arrayBuffer())
-  const ext = path.extname(f.file_path) || path.extname(suggestedName || '') || ''
+  if (buf.length > MAX_FILE) throw new Error(`download ${fileId}: too large (${buf.length} bytes)`)
+  const rawExt = path.extname(f.file_path) || path.extname(suggestedName || '') || ''
+  const ext = rawExt.replace(/[^.\w]/g, '').slice(0, 12) // no path separators / traversal
+
   const base = suggestedName ? sanitize(path.basename(suggestedName, path.extname(suggestedName))) : sanitize(path.basename(f.file_path, ext))
   const stamp = new Date().toISOString().slice(0, 10)
   const target = path.join(INBOX, `tg_${stamp}_${base}${ext}`)
@@ -76,11 +83,16 @@ async function writeText(msg, text) {
 async function handle(msg) {
   const chatId = String(msg.chat?.id ?? '')
   console.log(`[msg] chat_id=${chatId} from=${msg.from?.username || msg.from?.first_name || '?'}`)
-  if (ALLOWED.length && !ALLOWED.includes(chatId)) {
+  // Fail-closed: an empty allowlist rejects everyone (still logs the id so you
+  // can configure it), rather than accepting any stranger who finds the bot.
+  if (!ALLOWED.length) {
+    console.log(`[reject] ALLOWED_CHAT_IDS empty — set it to "${chatId}" then restart to accept`)
+    return
+  }
+  if (!ALLOWED.includes(chatId)) {
     console.log(`[skip] chat_id ${chatId} not in ALLOWED_CHAT_IDS`)
     return
   }
-  if (!ALLOWED.length) console.log(`[bootstrap] ALLOWED_CHAT_IDS empty — set it to "${chatId}" to lock down`)
 
   const saved = []
   if (msg.photo?.length) saved.push(await downloadFile(msg.photo[msg.photo.length - 1].file_id))
@@ -125,10 +137,13 @@ async function main() {
     try {
       const updates = await api('getUpdates', { offset, timeout: 50, allowed_updates: ['message'] })
       for (const u of updates) {
-        offset = u.update_id + 1
         if (u.message) {
-          try { await handle(u.message) } catch (e) { console.error(`[err] msg ${u.message.message_id}: ${e.message}`) }
+          // At-least-once: only advance/persist the offset AFTER a successful
+          // handle. On failure, stop the batch so the next poll re-fetches it.
+          try { await handle(u.message) }
+          catch (e) { console.error(`[err] msg ${u.message.message_id}: ${e.message} — will retry`); break }
         }
+        offset = u.update_id + 1
         await fs.writeFile(OFFSET_FILE, String(offset), 'utf8')
       }
     } catch (e) {
