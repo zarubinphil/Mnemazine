@@ -61,8 +61,14 @@ Mnemazine экономит токены, вынося работу из повт
 ```bash
 git clone https://github.com/zarubinphil/Mnemazine.git "$HOME/Desktop/Mnemazine"
 cd "$HOME/Desktop/Mnemazine"
-bash install.sh
+bash setup.sh        # пошагово, с вопросами (куда класть inbox, опц. Telegram-бот)
+# или: bash install.sh   # без вопросов, только каркас
 ```
+
+`setup.sh` проводит новое устройство по этапам: проверяет окружение, чётко
+говорит что доустановить если чего-то нет, спрашивает куда класть `inbox/`
+(в репозитории или на рабочий стол), может задеплоить Telegram-бота на VPS.
+Прогон вхолостую без изменений: `MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh`.
 
 После установки откройте эту папку как Obsidian-vault:
 
