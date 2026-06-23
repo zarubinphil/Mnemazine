@@ -295,6 +295,60 @@ function groupByCluster(records) {
   return [...map.entries()].sort((a, b) => b[1].length - a[1].length)
 }
 
+function brief(text, max = 150) {
+  const value = present(String(text || '').replace(/\s+/g, ' ').trim())
+  if (!value) return ''
+  return value.length > max ? `${value.slice(0, max - 1).trim()}...` : value
+}
+
+function unique(values, limit) {
+  const seen = new Set()
+  const out = []
+  for (const value of values.map(v => brief(v, 96)).filter(Boolean)) {
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(value)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+function moduleModel(clusters) {
+  return clusters.map(([name, items]) => {
+    const sorted = [...items].sort((a, b) => b.score - a.score)
+    const lead = sorted[0] || {}
+    const atoms = unique(sorted.flatMap(item => item.atoms.length ? item.atoms : [item.title]), 6)
+    return {
+      name,
+      count: items.length,
+      files: items.reduce((sum, item) => sum + item.files, 0),
+      title: brief(lead.title, 80) || name,
+      what: brief(lead.summary || lead.title, 170) || 'Новый блок знаний для повторного использования.',
+      why: brief(lead.helps, 150) || 'Можно привязать к проектам, агентам, скриптам или решениям.',
+      next: brief(lead.next, 150) || inferAction(lead),
+      atoms,
+      score: sorted.reduce((sum, item) => sum + item.score, 0),
+      file: lead.file || '',
+    }
+  })
+}
+
+function graphSvg(modules) {
+  const width = 760
+  const height = 380
+  const cx = width / 2
+  const cy = height / 2
+  const radius = 142
+  const nodes = modules.slice(0, 8).map((mod, index, arr) => {
+    const angle = (-90 + index * (360 / Math.max(1, arr.length))) * Math.PI / 180
+    return { ...mod, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius }
+  })
+  const lines = nodes.map(n => `<line x1="${cx}" y1="${cy}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}" />`).join('')
+  const circles = nodes.map((n, index) => `<g class="g-node" style="--i:${index}" transform="translate(${n.x.toFixed(1)} ${n.y.toFixed(1)})"><circle r="${Math.min(48, 28 + n.count * 2)}" /><text text-anchor="middle" y="-4">${esc(n.name.slice(0, 18))}</text><text class="sub" text-anchor="middle" y="15">${n.count} нот</text></g>`).join('')
+  return `<svg class="knowledge-graph" viewBox="0 0 ${width} ${height}" role="img" aria-label="Карта модулей знаний"><g class="links">${lines}</g><g class="center"><circle cx="${cx}" cy="${cy}" r="54" /><text x="${cx}" y="${cy - 4}" text-anchor="middle">Mnemazine</text><text class="sub" x="${cx}" y="${cy + 17}" text-anchor="middle">новые знания</text></g>${circles}</svg>`
+}
+
 function mermaid(records) {
   const clusters = groupByCluster(records.filter(r => r.outcomes.note || r.outcomes.atoms))
   const lines = ['mindmap', '  root((Mnemazine batch))']
@@ -362,23 +416,29 @@ function html({ records, results }) {
   const dup = records.filter(r => !r.outcomes.note && !r.outcomes.atoms && r.outcomes.dup)
   const actions = top20(records)
   const clusters = groupByCluster(fresh)
+  const modules = moduleModel(clusters)
+  const topModules = modules.slice(0, 6)
+  const minuteActions = actions.slice(0, 6)
   const css = `
-:root{--bg:#f5f7fb;--card:#fff;--ink:#111827;--muted:#667085;--line:#e6eaf0;--blue:#0a66ff;--red:#d33a2c;--shadow:0 18px 44px rgba(24,39,75,.08);--ease:cubic-bezier(.23,1,.32,1)}
+:root{--bg:#f6f7fb;--card:#fff;--ink:#111827;--muted:#667085;--line:#e6eaf0;--blue:#0a66ff;--green:#0f9f6e;--yellow:#b7791f;--red:#d33a2c;--shadow:0 18px 44px rgba(24,39,75,.08);--ease:cubic-bezier(.23,1,.32,1)}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;letter-spacing:0}
-a{color:inherit}.hero{min-height:64vh;padding:72px max(24px,7vw) 48px;background:linear-gradient(180deg,#fff 0%,#f5f7fb 100%);display:grid;align-items:end;border-bottom:1px solid var(--line)}
-.eyebrow{font-size:13px;font-weight:760;color:var(--blue);text-transform:uppercase;letter-spacing:.08em}.hero h1{font-size:clamp(44px,7vw,92px);line-height:.94;margin:12px 0 16px;letter-spacing:0;max-width:980px}.lead{font-size:clamp(18px,2vw,24px);line-height:1.35;color:#344054;max-width:820px}
-.stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.stat{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 14px;box-shadow:var(--shadow);min-width:144px}.stat strong{display:block;font-size:26px}.stat span{font-size:13px;color:var(--muted)}
-main{padding:34px max(18px,6vw) 80px}.section-title{display:flex;justify-content:space-between;gap:16px;align-items:end;margin:34px 0 14px}.section-title h2{font-size:30px;margin:0;letter-spacing:0}.section-title p{max-width:620px;color:var(--muted);line-height:1.5;margin:0}
-.map{display:grid;grid-template-columns:280px 1fr;gap:14px}.cluster-nav{display:grid;gap:8px;align-content:start}.pill{display:flex;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:var(--shadow);font-weight:680}.pill small{color:var(--muted)}
-.tree{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:18px}.branch{border-left:2px solid #dbe4f0;padding:0 0 12px 16px;margin:0 0 10px}.branch h3{margin:0 0 10px;font-size:18px}.leaf{display:grid;gap:6px;margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbfcff}.leaf strong{font-size:15px}.atoms{display:flex;flex-wrap:wrap;gap:6px}.atom{font-size:12px;color:#475467;background:#eef3ff;border:1px solid #dce7ff;border-radius:7px;padding:5px 7px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:18px;transition:transform 160ms var(--ease),box-shadow 180ms var(--ease)}.card:hover{transform:translateY(-2px);box-shadow:0 22px 48px rgba(24,39,75,.12)}.card:active{transform:scale(.995)}
-.meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.tag{font-size:12px;color:#344054;background:#f2f4f7;border:1px solid var(--line);border-radius:7px;padding:5px 7px}.card h3{font-size:19px;line-height:1.2;margin:0 0 10px}.card p{font-size:14px;line-height:1.55;color:#344054;margin:8px 0}.next{border-top:1px solid var(--line);margin-top:12px;padding-top:12px;color:#1d2939!important}
-.actions-list{counter-reset:step;display:grid;gap:10px}.action{display:grid;grid-template-columns:42px 1fr;gap:12px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:14px}.action:before{counter-increment:step;content:counter(step);width:32px;height:32px;border-radius:8px;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:780}.action h3{margin:0 0 5px;font-size:17px}.action p{margin:0;color:#475467;line-height:1.45}.action .cluster{color:var(--blue);font-size:12px;font-weight:760;text-transform:uppercase;letter-spacing:.06em}
-.dups{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.dup{background:#fff;border:1px solid var(--line);border-radius:8px;padding:13px}.dup b{display:block;margin-bottom:5px}.dup span{color:var(--muted);font-size:13px}
-@media(max-width:780px){.map{grid-template-columns:1fr}.hero{min-height:auto;padding-top:52px}.section-title{display:block}.section-title p{margin-top:8px}}
+a{color:inherit}.hero{padding:44px max(18px,5vw) 24px;background:#fff;border-bottom:1px solid var(--line)}
+.eyebrow{font-size:12px;font-weight:760;color:var(--blue);text-transform:uppercase;letter-spacing:.08em}.hero h1{font-size:clamp(36px,5vw,64px);line-height:1;margin:10px 0 10px;letter-spacing:0}.lead{font-size:clamp(16px,1.7vw,21px);line-height:1.35;color:#344054;max-width:900px;margin:0}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.stat{background:#f9fafb;border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:132px}.stat strong{display:block;font-size:24px}.stat span{font-size:12px;color:var(--muted)}
+main{padding:20px max(16px,4.5vw) 64px}.minute{display:grid;grid-template-columns:minmax(340px,1.35fr) minmax(300px,.75fr);gap:14px;align-items:stretch}.panel{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:16px}.panel h2{font-size:22px;margin:0 0 10px}.panel p{color:#475467;line-height:1.45;margin:0}
+.knowledge-graph{width:100%;height:auto;display:block}.knowledge-graph .links line{stroke:#d8e2ef;stroke-width:2}.knowledge-graph .center circle{fill:#111827}.knowledge-graph .center text{fill:#fff;font-size:16px;font-weight:760}.knowledge-graph text.sub{font-size:12px;font-weight:560;fill:#667085}.knowledge-graph .center text.sub{fill:#d0d5dd}.g-node circle{fill:#fff;stroke:#a9c5ff;stroke-width:2;filter:drop-shadow(0 8px 18px rgba(24,39,75,.12))}.g-node text{font-size:12px;font-weight:760;fill:#1d2939}.g-node .sub{fill:#667085}
+.action-stack{display:grid;gap:8px;counter-reset:step}.quick-action{display:grid;grid-template-columns:30px 1fr;gap:9px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fbfcff}.quick-action:before{counter-increment:step;content:counter(step);width:26px;height:26px;border-radius:8px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:800}.quick-action b{display:block;font-size:13px;margin-bottom:3px}.quick-action span{display:block;color:#475467;font-size:13px;line-height:1.35}
+.section-title{display:flex;justify-content:space-between;gap:16px;align-items:end;margin:24px 0 12px}.section-title h2{font-size:24px;margin:0;letter-spacing:0}.section-title p{max-width:620px;color:var(--muted);line-height:1.45;margin:0}
+.modules{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.module{background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:15px;display:grid;gap:10px}.module-head{display:flex;justify-content:space-between;gap:10px;align-items:start}.module h3{font-size:18px;line-height:1.15;margin:0}.badge{font-size:12px;color:#344054;background:#f2f4f7;border:1px solid var(--line);border-radius:7px;padding:5px 7px;white-space:nowrap}.module-grid{display:grid;grid-template-columns:72px 1fr;gap:6px 10px;font-size:13px}.module-grid b{color:#1d2939}.module-grid span{color:#475467;line-height:1.35}.atoms{display:flex;flex-wrap:wrap;gap:6px}.atom{font-size:12px;color:#475467;background:#eef3ff;border:1px solid #dce7ff;border-radius:7px;padding:5px 7px}
+.details{margin-top:18px}.details summary{cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:14px 16px;font-weight:760}.details-body{padding-top:12px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px}.meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.tag{font-size:11px;color:#344054;background:#f2f4f7;border:1px solid var(--line);border-radius:7px;padding:4px 6px}.card h3{font-size:16px;line-height:1.2;margin:0 0 8px}.card p{font-size:13px;line-height:1.45;color:#344054;margin:7px 0}.dups{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.dup{background:#fff;border:1px solid var(--line);border-radius:8px;padding:11px}.dup b{display:block;margin-bottom:4px}.dup span{color:var(--muted);font-size:12px}
+@media(max-width:880px){.minute{grid-template-columns:1fr}.section-title{display:block}.section-title p{margin-top:6px}.knowledge-graph{max-height:360px}.module-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 `
-  const clusterHtml = clusters.map(([name, items]) => `<section class="branch" id="${esc(name)}"><h3>${esc(name)} <span style="color:#98a2b3">${items.length}</span></h3>${items.slice(0, 10).map(item => `<div class="leaf"><strong>${esc(item.title)}</strong><div class="atoms">${(item.atoms.length ? item.atoms : [item.summary || 'малое знание']).slice(0, 4).map(atom => `<span class="atom">${esc(atom)}</span>`).join('')}</div></div>`).join('')}</section>`).join('')
+  const moduleHtml = topModules.map(mod => `<article class="module" id="${esc(mod.name)}">
+    <div class="module-head"><h3>${esc(mod.name)}</h3><span class="badge">${mod.count} нот · ${mod.files} файлов</span></div>
+    <div class="module-grid"><b>Что</b><span>${esc(mod.what)}</span><b>Зачем</b><span>${esc(mod.why)}</span><b>Действие</b><span>${esc(mod.next)}</span></div>
+    <div class="atoms">${mod.atoms.map(atom => `<span class="atom">${esc(atom)}</span>`).join('')}</div>
+  </article>`).join('')
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -391,8 +451,8 @@ main{padding:34px max(18px,6vw) 80px}.section-title{display:flex;justify-content
 <header class="hero">
   <div>
     <div class="eyebrow">Mnemazine post-run knowledge report</div>
-    <h1>Что реально появилось в базе</h1>
-    <p class="lead">Светлая карта знаний после прохода: крупные области, ноты, малые атомы и двадцать действий, которые стоит взять в работу.</p>
+    <h1>Минутная карта знаний</h1>
+    <p class="lead">Сначала модули и атомы, потом действия. Подробный текст спрятан ниже, чтобы быстро понять, что появилось и зачем это нужно.</p>
     <div class="stats">
       <div class="stat"><strong>${results.length}</strong><span>смысловых групп</span></div>
       <div class="stat"><strong>${fresh.length}</strong><span>новых и обновленных целей</span></div>
@@ -402,18 +462,31 @@ main{padding:34px max(18px,6vw) 80px}.section-title{display:flex;justify-content
   </div>
 </header>
 <main>
-  <section class="section-title"><h2>Синтез</h2><p>Источники и проверка сведены в обзор, применение вынесено в действия. Следующее действие выбирается из top-20, а риск отмечается через дубли, неизвестные и слабые извлечения.</p></section>
-  <section class="section-title"><h2>Схема знаний</h2><p>Сначала область, затем ноты, ниже маленькие атомы. Так видно, почему сотни файлов сжались в меньшее число сильных знаний.</p></section>
-  <section class="map">
-    <nav class="cluster-nav">${clusters.map(([name, items]) => `<a class="pill" href="#${esc(name)}">${esc(name)} <small>${items.length}</small></a>`).join('')}</nav>
-    <div class="tree">${clusterHtml}</div>
+  <section class="minute">
+    <div class="panel">
+      <h2>Блок-схема</h2>
+      ${graphSvg(topModules)}
+      <p>Синтез: источники и проверка сведены в модули. Применение видно через действия, риск — через дубли, неизвестные и слабые извлечения.</p>
+      <p><a href="#modules">Источники</a> · <a href="#actions">Где применить</a> · <a href="#details">Проверка и риск</a></p>
+    </div>
+    <div class="panel" id="actions">
+      <h2>Следующее действие</h2>
+      <div class="action-stack">${minuteActions.map(item => `<article class="quick-action"><div><b>${esc(item.cluster)}</b><span>${esc(brief(item.next, 120))}</span></div></article>`).join('')}</div>
+    </div>
   </section>
-  <section class="section-title"><h2>Топ-20 к действию</h2><p>Мой рекомендуемый порядок: сначала то, что превращается в продукт, workflow или команду без долгой подготовки.</p></section>
-  <section class="actions-list">${actions.map(item => `<article class="action"><div><div class="cluster">${esc(item.cluster)}</div><h3>${esc(item.title)}</h3><p>${esc(item.next)}</p></div></article>`).join('')}</section>
-  <section class="section-title"><h2>Новые и обновленные знания</h2><p>Полный слой полезных нот и атомов. Дубли вынесены ниже, чтобы не мешали восприятию.</p></section>
-  <section class="cards">${fresh.sort((a, b) => b.score - a.score).map(item => `<article class="card"><div class="meta"><span class="tag">${esc(item.cluster)}</span><span class="tag">${esc(outcomeLabel(item))}</span><span class="tag">${item.files} files</span></div><h3>${item.file ? `<a href="file://${esc(item.file)}">${esc(item.title)}</a>` : esc(item.title)}</h3><p>${esc(item.summary || 'Описание не найдено, смотри ноту.')}</p><p><strong>Как полезно:</strong> ${esc(item.helps || 'Привязать к ближайшему проекту.')}</p><p class="next"><strong>Следующий ход:</strong> ${esc(item.next)}</p></article>`).join('')}</section>
-  <section class="section-title"><h2>Дубли без потерь</h2><p>Эти материалы уже были покрыты. Они не создали мусорные ноты, но подтвердили существующие знания.</p></section>
-  <section class="dups">${dup.sort((a, b) => b.files - a.files).map(item => `<article class="dup"><b>${esc(item.title)}</b><span>${esc(item.cluster)} · ${item.files} files · ${esc(outcomeLabel(item))}</span></article>`).join('')}</section>
+  <section class="section-title" id="modules"><h2>Модули и атомы</h2><p>Каждый модуль: что это, для чего нужно, какие маленькие знания внутри.</p></section>
+  <section class="modules">${moduleHtml}</section>
+  <details class="details" id="details">
+    <summary>Подробности: все ноты, top-20 действий и дубли</summary>
+    <div class="details-body">
+      <section class="section-title"><h2>Топ-20 к действию</h2><p>Полный рекомендуемый порядок.</p></section>
+      <section class="cards">${actions.map((item, i) => `<article class="card"><div class="meta"><span class="tag">#${i + 1}</span><span class="tag">${esc(item.cluster)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.next)}</p></article>`).join('')}</section>
+      <section class="section-title"><h2>Новые и обновленные знания</h2><p>Архивная часть отчёта.</p></section>
+      <section class="cards">${fresh.sort((a, b) => b.score - a.score).map(item => `<article class="card"><div class="meta"><span class="tag">${esc(item.cluster)}</span><span class="tag">${esc(outcomeLabel(item))}</span><span class="tag">${item.files} files</span></div><h3>${item.file ? `<a href="file://${esc(item.file)}">${esc(item.title)}</a>` : esc(item.title)}</h3><p>${esc(brief(item.summary || 'Описание не найдено, смотри ноту.', 180))}</p><p><strong>Как полезно:</strong> ${esc(brief(item.helps || 'Привязать к ближайшему проекту.', 160))}</p></article>`).join('')}</section>
+      <section class="section-title"><h2>Дубли без потерь</h2><p>Материалы, которые подтвердили уже существующие знания.</p></section>
+      <section class="dups">${dup.sort((a, b) => b.files - a.files).map(item => `<article class="dup"><b>${esc(item.title)}</b><span>${esc(item.cluster)} · ${item.files} files · ${esc(outcomeLabel(item))}</span></article>`).join('')}</section>
+    </div>
+  </details>
 </main>
 </body>
 </html>`
