@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Default to where this script lives (the clone), not a hardcoded path.
 ROOT="${MNEMAZINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+[ -f "$ROOT/.mnemazine/config.local.sh" ] && . "$ROOT/.mnemazine/config.local.sh"
 INBOX="${MNEMAZINE_INBOX:-$ROOT/inbox}"
 VAULT="${MNEMAZINE_VAULT:-$ROOT/vault}"
 REPORTS="${MNEMAZINE_REPORTS:-$ROOT/reports}"
@@ -64,11 +65,15 @@ cat > "$ROOT/.mnemazine/config.json" <<EOF
 }
 EOF
 
-cat > "$ROOT/.mnemazine/config.local.sh" <<EOF
+if [ ! -f "$ROOT/.mnemazine/config.local.sh" ]; then
+  cat > "$ROOT/.mnemazine/config.local.sh" <<EOF
 # Non-secret local paths. Safe to edit.
 export MNEMAZINE_INBOX="$INBOX"
 export MNEMAZINE_VAULT="$VAULT"
 EOF
+else
+  echo "Local config preserved: $ROOT/.mnemazine/config.local.sh"
+fi
 
 if [ -f "$ROOT/bin/mnemazine" ]; then
   chmod +x "$ROOT/bin/mnemazine"

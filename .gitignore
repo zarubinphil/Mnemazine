@@ -12,6 +12,7 @@ __pycache__/
 .mnemazine/quarantine/
 .mnemazine/backlog/
 .mnemazine/owner-context.txt
+.mnemazine/config.json
 .mnemazine/config.env
 .mnemazine/config.local.sh
 .mnemazine/.last-daily

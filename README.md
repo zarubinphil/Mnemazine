@@ -72,6 +72,12 @@ asks where to put the `inbox/` (inside the repo or on the Desktop), and can
 deploy the Telegram bot to a VPS. Preview a run without touching anything:
 `MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh`.
 
+Update an existing clone:
+
+```bash
+cd "$HOME/Desktop/Mnemazine" && git pull --ff-only && bash install.sh
+```
+
 After installation, open this folder as an Obsidian vault:
 
 ```text
