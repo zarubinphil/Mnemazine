@@ -17,7 +17,10 @@ function flag(name) {
   return argv.includes(`--${name}`)
 }
 
-const VAULT = resolveVault({ cli: arg('vault') })
+const REPO_VAULT = path.join(ROOT, 'vault')
+const VAULT = resolveVault({
+  cli: arg('vault', process.env.MNEMAZINE_VAULT || (fsSync.existsSync(REPO_VAULT) ? REPO_VAULT : '')),
+})
 const REPORTS = path.resolve(arg('reports', process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')))
 const RUN_ID = arg('run-id', new Date().toISOString().slice(0, 10))
 const TITLE = arg('title', 'Mnemazine knowledge brief')
@@ -399,6 +402,7 @@ main{padding:34px max(18px,6vw) 80px}.section-title{display:flex;justify-content
   </div>
 </header>
 <main>
+  <section class="section-title"><h2>Синтез</h2><p>Источники и проверка сведены в обзор, применение вынесено в действия. Следующее действие выбирается из top-20, а риск отмечается через дубли, неизвестные и слабые извлечения.</p></section>
   <section class="section-title"><h2>Схема знаний</h2><p>Сначала область, затем ноты, ниже маленькие атомы. Так видно, почему сотни файлов сжались в меньшее число сильных знаний.</p></section>
   <section class="map">
     <nav class="cluster-nav">${clusters.map(([name, items]) => `<a class="pill" href="#${esc(name)}">${esc(name)} <small>${items.length}</small></a>`).join('')}</nav>
