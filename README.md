@@ -78,6 +78,12 @@ Update an existing clone:
 cd "$HOME/Desktop/Mnemazine" && git pull --ff-only && bash install.sh
 ```
 
+Agent chat update:
+
+```text
+Mnemazine update
+```
+
 After installation, open this folder as an Obsidian vault:
 
 ```text

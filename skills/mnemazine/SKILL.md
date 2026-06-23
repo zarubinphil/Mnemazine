@@ -11,6 +11,14 @@ Use it when the user gives raw material and wants it preserved as durable knowle
 
 ## Chat Shortcut
 
+If the user says `Mnemazine update`, `Мнемозина update`, or `обнови Mnemazine`, run from the project root:
+
+```bash
+npm run update
+```
+
+This updates from GitHub with `git pull --ff-only`, preserves local config, reinstalls local wrappers, and runs syntax checks. It must not process inbox files.
+
 If the user says `Mnemazine`, `Mnemazine inbox`, `Мнемозина`, `Мнемозина, inbox`, or `запусти Мнемозину`, run from the project root:
 
 ```bash

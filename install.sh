@@ -14,7 +14,7 @@ USER_BIN="$HOME/.local/bin"
 mkdir -p "$INBOX" "$VAULT" "$REPORTS" "$STATE" "$BIN" "$USER_BIN" "$ROOT/.mnemazine/cache"
 mkdir -p "$VAULT/00 System" "$VAULT/01 Concepts" "$VAULT/02 Tools" "$VAULT/03 Agents" "$VAULT/04 Projects" "$VAULT/99 Archive"
 
-if command -v python3 >/dev/null 2>&1; then
+if [ "${MNEMAZINE_SKIP_DEPS:-0}" != "1" ] && command -v python3 >/dev/null 2>&1; then
   python3 -m venv "$ROOT/.venv" || true
   "$ROOT/.venv/bin/python" -m pip install --upgrade pip
   "$ROOT/.venv/bin/python" -m pip install -r "$ROOT/requirements.txt" || true
