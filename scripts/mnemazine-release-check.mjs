@@ -142,8 +142,41 @@ async function demoSmoke() {
 async function qualityAndPublicChecks() {
   await must('demo vault quality', 'npm', ['run', 'quality', '--', '--vault', 'demo/vault'])
   await reportQualityGateSmoke()
-  await must('complete gate smoke', 'npm', ['run', 'complete'])
+  await completeGateSmoke()
   await must('public release scan', 'npm', ['run', 'public-check'])
+}
+
+async function completeGateSmoke() {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-complete-gate-'))
+  const inbox = path.join(temp, 'inbox')
+  const reports = path.join(temp, 'reports')
+  const state = path.join(temp, 'state')
+  await fs.mkdir(inbox, { recursive: true })
+  await fs.mkdir(reports, { recursive: true })
+  await fs.mkdir(state, { recursive: true })
+  await fs.writeFile(path.join(reports, 'complete-smoke.html'), [
+    '<!doctype html><html><body>',
+    '<main data-knowledge-atom="complete-smoke">',
+    '<h1>Синтезированные знания</h1>',
+    '<section><h2>Синтез</h2><p>Проверенная идея после обработки.</p></section>',
+    '<section><h2>Источники</h2>',
+    '<a href="https://example.com/source-a">source a</a>',
+    '<a href="https://example.com/source-b">source b</a>',
+    '<a href="https://example.com/source-c">source c</a></section>',
+    '<section><h2>Где применить</h2><p>В пайплайне.</p></section>',
+    '<section><h2>Проверка и риск</h2><p>Проверить источники.</p></section>',
+    '<section><h2>Следующее действие</h2><p>Запустить gate.</p></section>',
+    '</main></body></html>'
+  ].join(''), 'utf8')
+  await fs.writeFile(path.join(state, 'last-action-brief.md'), '# Complete Gate Smoke\n\n- Next action: keep release gate green.\n', 'utf8')
+  await must('complete gate smoke', process.execPath, ['scripts/mnemazine-complete-check.mjs'], {
+    env: {
+      MNEMAZINE_VAULT: path.join(ROOT, 'demo/vault'),
+      MNEMAZINE_INBOX: inbox,
+      MNEMAZINE_REPORTS: reports,
+      MNEMAZINE_STATE: state
+    }
+  })
 }
 
 async function reportQualityGateSmoke() {

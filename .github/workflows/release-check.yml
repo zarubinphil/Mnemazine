@@ -31,6 +31,6 @@ jobs:
           npm --version
           python3 --version
       - name: Run post-run report smoke
-        run: npm run postrun -- --run-id ci-postrun --since-days 30 --quiet
+        run: npm run postrun -- --run-id ci-postrun --since-days 30 --reports "$RUNNER_TEMP/mnemazine-postrun" --quiet
       - name: Run release gate (syntax, demo smoke, public scan, bilingual README parity)
         run: npm run release-check
