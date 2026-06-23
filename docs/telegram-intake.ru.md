@@ -25,7 +25,7 @@ LLM-бинарь). Бот живёт на всегда-онлайн хосте, 
                             ▼
                   rsync --remove-source-files  (move; хост остаётся тонким)
                             ▼
-                    локальный inbox/  ──▶  npm run run  (протокол)
+                    локальный inbox/  ──▶  npm start  (строгий протокол)
                             ▼
                           vault/      ──пишет .last-run──▶ статус Mini App
 ```
@@ -42,7 +42,7 @@ LLM-бинарь). Бот живёт на всегда-онлайн хосте, 
 | `scripts/mnemazine-webapp-server.mjs` | хост | API Mini App (`/api/status`, `/api/send`, `/api/run`). Верифицирует `initData`, держит allowlist. Ноль зависимостей. |
 | `webapp/index.html` | хост (статика) | UI Mini App. Тема-aware, один файл. |
 | `scripts/mnemazine-telegram-poll.sh` | твоя машина | Тик ~5 мин: флаг run-now / дневное окно → pull + прогон. |
-| `scripts/mnemazine-telegram-sync.sh` | твоя машина | rsync pull (move) + `npm run run`. |
+| `scripts/mnemazine-telegram-sync.sh` | твоя машина | rsync pull (move) + `npm start`. |
 | `scripts/com.mnemazine.telegram-sync.plist.template` | твоя машина | launchd-агент (macOS) для тика. |
 
 ## Установка

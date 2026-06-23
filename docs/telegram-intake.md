@@ -25,7 +25,7 @@ only a transit buffer, never a second store.
                           ▼
                   rsync --remove-source-files  (move; host stays thin)
                           ▼
-                    local inbox/  ──▶  npm run run  (the protocol)
+                    local inbox/  ──▶  npm start  (the strict protocol)
                           ▼
                         vault/        ──writes .last-run──▶ Mini App status
 ```
@@ -42,7 +42,7 @@ that flag; the next poll consumes it.
 | `scripts/mnemazine-webapp-server.mjs` | host | Mini App API (`/api/status`, `/api/send`, `/api/run`). Verifies Telegram `initData`, enforces an allowlist. Zero deps. |
 | `webapp/index.html` | host (static) | The Mini App UI. Theme-aware, single file. |
 | `scripts/mnemazine-telegram-poll.sh` | your machine | ~5-min tick: consume run-now flag / daily window → pull + run. |
-| `scripts/mnemazine-telegram-sync.sh` | your machine | rsync pull (move) + `npm run run`. |
+| `scripts/mnemazine-telegram-sync.sh` | your machine | rsync pull (move) + `npm start`. |
 | `scripts/com.mnemazine.telegram-sync.plist.template` | your machine | launchd agent (macOS) for the poll tick. |
 
 ## Setup

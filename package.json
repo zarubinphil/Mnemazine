@@ -4,6 +4,10 @@
   "private": false,
   "type": "module",
   "description": "Local-first memory system for turning raw inputs into verified reusable knowledge / Локальная система памяти из сырья в проверяемые знания.",
+  "bin": {
+    "mnemazine": "bin/mnemazine",
+    "Mnemazine": "bin/mnemazine"
+  },
   "scripts": {
     "install:local": "bash install.sh",
     "start": "bash scripts/mnemazine-desktop-protocol.sh",

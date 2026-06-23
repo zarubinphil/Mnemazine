@@ -8,8 +8,9 @@ VAULT="${MNEMAZINE_VAULT:-$ROOT/vault}"
 REPORTS="${MNEMAZINE_REPORTS:-$ROOT/reports}"
 STATE="${MNEMAZINE_STATE:-$ROOT/.mnemazine/state}"
 BIN="$ROOT/.mnemazine/bin"
+USER_BIN="$HOME/.local/bin"
 
-mkdir -p "$INBOX" "$VAULT" "$REPORTS" "$STATE" "$BIN" "$ROOT/.mnemazine/cache"
+mkdir -p "$INBOX" "$VAULT" "$REPORTS" "$STATE" "$BIN" "$USER_BIN" "$ROOT/.mnemazine/cache"
 mkdir -p "$VAULT/00 System" "$VAULT/01 Concepts" "$VAULT/02 Tools" "$VAULT/03 Agents" "$VAULT/04 Projects" "$VAULT/99 Archive"
 
 if command -v python3 >/dev/null 2>&1; then
@@ -63,10 +64,23 @@ cat > "$ROOT/.mnemazine/config.json" <<EOF
 }
 EOF
 
+cat > "$ROOT/.mnemazine/config.local.sh" <<EOF
+# Non-secret local paths. Safe to edit.
+export MNEMAZINE_INBOX="$INBOX"
+export MNEMAZINE_VAULT="$VAULT"
+EOF
+
+if [ -f "$ROOT/bin/mnemazine" ]; then
+  chmod +x "$ROOT/bin/mnemazine"
+  ln -sf "$ROOT/bin/mnemazine" "$USER_BIN/mnemazine"
+  ln -sf "$ROOT/bin/mnemazine" "$USER_BIN/Mnemazine"
+fi
+
 echo "Mnemazine installed."
 echo "Root: $ROOT"
 echo "Inbox: $INBOX"
 echo "Vault: $VAULT"
+echo "Command: $USER_BIN/mnemazine"
 echo "Open the vault folder in Obsidian."
 
 # Greet only when run directly. Under setup.sh this is a mid-flow sub-step;

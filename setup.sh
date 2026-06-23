@@ -81,9 +81,9 @@ note "Это не блокеры. Каркас поставится и без н
 # ---- Stage 3: inbox location (required question) ---------------------------
 stage 3 "Куда класть inbox?"
 ask_choice "Входящие материалы будут падать сюда:" \
-  "Внутри репозитория — $ROOT/inbox" \
-  "На рабочий стол — $HOME/Desktop/Mnemazine-inbox"
-if [ "$REPLY_IDX" = "1" ]; then INBOX="$ROOT/inbox"; else INBOX="$HOME/Desktop/Mnemazine-inbox"; fi
+  "На рабочий стол — $HOME/Desktop/Mnemazine Inbox" \
+  "Внутри репозитория — $ROOT/inbox"
+if [ "$REPLY_IDX" = "1" ]; then INBOX="$HOME/Desktop/Mnemazine Inbox"; else INBOX="$ROOT/inbox"; fi
 ok "Inbox: $INBOX"
 
 # ---- Stage 4: LLM provider (deep mode) -------------------------------------
@@ -180,7 +180,11 @@ ok "Каркас: $ROOT"
 ok "Inbox: $INBOX"
 [ -n "$LLM" ] && ok "Deep-провайдер: $LLM" || note "Deep выключен — включишь позже через MNEMAZINE_LLM."
 note "Открой папку vault в Obsidian."
-note "Прогон: cd $ROOT && npm run run   (deep: npm run run -- --deep)"
+note "Открой проект: $ROOT"
+note "Клади файлы: $INBOX"
+note "В чате агента: Mnemazine"
+note "В терминале: npm start"
+note "Если ~/.local/bin есть в PATH: mnemazine"
 [ "$BOT_MODE" = "vps" ] && note "Mini App + ежедневный pull: см. docs/telegram-intake.md (этапы 2-3)."
 b "Всё. Пользуйся."
 

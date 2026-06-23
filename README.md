@@ -78,9 +78,10 @@ After installation, open this folder as an Obsidian vault:
 ~/Desktop/Mnemazine/vault
 ```
 
-Everything lives under `~/Desktop/Mnemazine` by default:
+The project lives under `~/Desktop/Mnemazine` by default:
 
-- `inbox/` for raw inputs;
+- `~/Desktop/Mnemazine Inbox` for raw inputs when you choose the Desktop inbox in `setup.sh`;
+- `inbox/` for repo-local raw inputs if you choose the repo inbox;
 - `vault/` for finished knowledge;
 - `reports/` for HTML weekly briefings;
 - `.mnemazine/` for caches, binaries, and local state;
@@ -102,19 +103,31 @@ The installer checks what exists and installs what it can safely install locally
 Put files into:
 
 ```text
-~/Desktop/Mnemazine/inbox
+~/Desktop/Mnemazine Inbox
 ```
 
-Then run:
+Open the project folder in your agent:
+
+```text
+~/Desktop/Mnemazine
+```
+
+Then type one word in chat:
+
+```text
+Mnemazine
+```
+
+Terminal equivalent:
 
 ```bash
 npm start
 ```
 
-Agent shortcut:
+After `setup.sh`, this also works when `~/.local/bin` is in your `PATH`:
 
-```text
-Mnemazine inbox
+```bash
+mnemazine
 ```
 
 The run performs:
@@ -132,7 +145,7 @@ The run performs:
 11. action brief at `.mnemazine/state/last-action-brief.md`;
 12. visual post-run knowledge report in `reports/`.
 
-`npm start` is the safe default for real inbox work. The lower-level `npm run run` command is for development and demos.
+`Mnemazine` / `npm start` is the safe default for real inbox work. The lower-level `npm run run` command is for development and demos.
 
 ## Website Ingestion
 

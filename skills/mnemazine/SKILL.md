@@ -11,7 +11,7 @@ Use it when the user gives raw material and wants it preserved as durable knowle
 
 ## Chat Shortcut
 
-If the user says `Mnemazine inbox`, `Мнемозина, inbox`, or `запусти Мнемозину`, run:
+If the user says `Mnemazine`, `Mnemazine inbox`, `Мнемозина`, `Мнемозина, inbox`, or `запусти Мнемозину`, run from the project root:
 
 ```bash
 npm start

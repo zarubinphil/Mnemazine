@@ -12,6 +12,8 @@ Deep mode is **off unless you ask for it**. Nothing in the default pipeline reac
 ```bash
 # real Desktop Inbox run, strict full protocol:
 npm start
+# after setup.sh, if ~/.local/bin is in PATH:
+mnemazine
 
 # whole run, deep:
 node scripts/mnemazine-run.mjs --deep
@@ -22,7 +24,7 @@ MNEMAZINE_DEEP=1 node scripts/mnemazine-run.mjs
 npm run synthesize -- --deep
 ```
 
-For live Desktop Inbox work, use `npm start`. It reads local config, enables deep mode, requires atomization + enrichment, and then runs the completion gate.
+For live Desktop Inbox work, use `npm start` or `mnemazine`. It reads local config, enables deep mode, requires atomization + enrichment, and then runs the completion gate.
 
 If deep mode is requested directly but no LLM engine is available, plain `node scripts/mnemazine-run.mjs --deep` falls back to local template synthesis and reports `degraded: true` in JSON. Strict runs (`--require-deep` or `npm start`) fail before archive.
 
