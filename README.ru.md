@@ -169,6 +169,29 @@ mnemazine
 npm run protocol:desktop:dry-run
 ```
 
+Перед настоящим live-прогоном запусти preflight:
+
+```bash
+npm run preflight:live
+```
+
+Он проверяет, что код чистый, `HEAD` совпадает с `origin/main`, локальные
+security gates зелёные, Desktop dry-run проходит, а в inbox есть активные
+файлы. Если preflight упал — `npm start` не запускай, сначала исправь причину.
+
+После live-прогона проверь итог:
+
+```bash
+cat .mnemazine/state/last-run.json
+cat .mnemazine/state/last-action-brief.md
+ls -t reports/* | head
+npm run complete -- --require-deep
+```
+
+Если строгий прогон падает до архива — это нормально и безопасно: исходники
+остаются в inbox. Не переносите и не удаляйте их руками. Читай
+`.mnemazine/state/last-run.json`, исправляй причину и запускай снова.
+
 ## Парсинг сайтов
 
 Mnemazine умеет забирать сайт и превращать его полезные страницы в структурированные заметки:

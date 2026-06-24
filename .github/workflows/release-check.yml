@@ -47,6 +47,8 @@ jobs:
         run: npm run audit:local
       - name: Run setup dry-run smoke
         run: printf '2\n2\n2\n' | MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh
+      - name: Run live preflight smoke
+        run: MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1 MNEMAZINE_PREFLIGHT_SKIP_REMOTE=1 npm run preflight:live
       - name: Run release test suite
         run: npm test
       - name: Run release gate directly

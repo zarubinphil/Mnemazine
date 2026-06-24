@@ -170,6 +170,29 @@ To test the Desktop path without touching the live inbox or vault:
 npm run protocol:desktop:dry-run
 ```
 
+Before a real live run, run the preflight:
+
+```bash
+npm run preflight:live
+```
+
+It checks that tracked code is clean, `HEAD` matches `origin/main`, local
+security gates pass, the Desktop dry-run passes, and the inbox has active
+files. If preflight fails, do not run `npm start`; fix the cause first.
+
+After a live run, inspect the result:
+
+```bash
+cat .mnemazine/state/last-run.json
+cat .mnemazine/state/last-action-brief.md
+ls -t reports/* | head
+npm run complete -- --require-deep
+```
+
+If a strict run fails before archive, that is safe: source files stay in the
+inbox. Do not move or delete them by hand. Read
+`.mnemazine/state/last-run.json`, fix the cause, and run again.
+
 ## Website Ingestion
 
 Mnemazine can ingest a website and convert its useful pages into structured notes:

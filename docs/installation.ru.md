@@ -69,6 +69,20 @@ npm run protocol:desktop:dry-run
 Команда гоняет Desktop-протокол на временных inbox/vault/cache/archive. Live
 Desktop inbox не архивируется, не удаляется и не переписывается.
 
+## Live preflight
+
+```bash
+npm run preflight:live
+```
+
+Перед настоящим `npm start` команда проверяет чистоту tracked-кода, совпадение
+с `origin/main`, локальный security audit, Desktop dry-run и наличие файлов в
+inbox. Пустой inbox или грязный код — fail. Для проверки самой команды без
+файлов можно временно поставить `MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1`.
+
+После live-прогона смотри `.mnemazine/state/last-run.json`,
+`.mnemazine/state/last-action-brief.md` и свежие файлы в `reports/`.
+
 ## Agent Skills
 
 Если есть папки skills для Codex или Claude — установщик копирует туда переносимые skills. Если их нет, ничего не ломается.
