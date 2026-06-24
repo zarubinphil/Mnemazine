@@ -175,22 +175,21 @@ npm run protocol:desktop:dry-run
 npm run preflight:live
 ```
 
-Он проверяет, что код чистый, `HEAD` совпадает с `origin/main`, локальные
-security gates зелёные, Desktop dry-run проходит, а в inbox есть активные
-файлы. Если preflight упал — `npm start` не запускай, сначала исправь причину.
+Он проверяет, что код чистый, `HEAD` совпадает с `origin/main`, LLM-провайдер
+доступен, локальные security gates зелёные, Desktop dry-run проходит, а в inbox
+есть активные файлы. Если preflight упал — `npm start` не запускай, сначала
+исправь причину.
 
 После live-прогона проверь итог:
 
 ```bash
-cat .mnemazine/state/last-run.json
-cat .mnemazine/state/last-action-brief.md
-ls -t reports/* | head
+npm run last-run -- --require-ok
 npm run complete -- --require-deep
 ```
 
 Если строгий прогон падает до архива — это нормально и безопасно: исходники
 остаются в inbox. Не переносите и не удаляйте их руками. Читай
-`.mnemazine/state/last-run.json`, исправляй причину и запускай снова.
+вывод `npm run last-run`, исправляй причину и запускай снова.
 
 ## Парсинг сайтов
 

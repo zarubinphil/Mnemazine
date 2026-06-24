@@ -76,12 +76,16 @@ npm run preflight:live
 ```
 
 Перед настоящим `npm start` команда проверяет чистоту tracked-кода, совпадение
-с `origin/main`, локальный security audit, Desktop dry-run и наличие файлов в
-inbox. Пустой inbox или грязный код — fail. Для проверки самой команды без
-файлов можно временно поставить `MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1`.
+с `origin/main`, доступность LLM-провайдера, локальный security audit, Desktop
+dry-run и наличие файлов в inbox. Пустой inbox, грязный код или недоступный LLM
+— fail. Для проверки самой команды без файлов можно временно поставить
+`MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1`.
 
-После live-прогона смотри `.mnemazine/state/last-run.json`,
-`.mnemazine/state/last-action-brief.md` и свежие файлы в `reports/`.
+После live-прогона смотри итог одной командой:
+
+```bash
+npm run last-run -- --require-ok
+```
 
 ## Agent Skills
 

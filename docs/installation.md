@@ -76,13 +76,16 @@ npm run preflight:live
 ```
 
 Before a real `npm start`, this checks that tracked code is clean, `HEAD`
-matches `origin/main`, the local security audit passes, the Desktop dry-run
-passes, and the inbox has active files. Empty inbox or dirty code is a failure.
-To test the command itself without files, temporarily set
-`MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1`.
+matches `origin/main`, the LLM provider is available, the local security audit
+passes, the Desktop dry-run passes, and the inbox has active files. Empty inbox,
+dirty code, or a missing LLM provider is a failure. To test the command itself
+without files, temporarily set `MNEMAZINE_PREFLIGHT_ALLOW_EMPTY=1`.
 
-After a live run, inspect `.mnemazine/state/last-run.json`,
-`.mnemazine/state/last-action-brief.md`, and the newest files in `reports/`.
+After a live run, inspect the result with:
+
+```bash
+npm run last-run -- --require-ok
+```
 
 ## Agent Skills
 

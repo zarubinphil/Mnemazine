@@ -17,6 +17,7 @@
     "audit:security": "npm audit --audit-level=moderate",
     "audit:local": "bash scripts/mnemazine-audit-local.sh",
     "preflight:live": "bash scripts/mnemazine-live-preflight.sh",
+    "last-run": "node scripts/mnemazine-live-status.mjs",
     "selftest:security": "node scripts/mnemazine-verify.mjs --selftest && node scripts/mnemazine-webapp-server.mjs --selftest && node scripts/mnemazine-telegram-bot.mjs --selftest && node scripts/mnemazine-weekly-state.mjs --selftest",
     "run": "node scripts/mnemazine-run.mjs",
     "protocol:desktop": "bash scripts/mnemazine-desktop-protocol.sh",

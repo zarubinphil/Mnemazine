@@ -71,6 +71,7 @@ async function checkSyntax() {
     'scripts/mnemazine-digest.mjs',
     'scripts/mnemazine-report-quality-gate.mjs',
     'scripts/mnemazine-complete-check.mjs',
+    'scripts/mnemazine-live-status.mjs',
     'scripts/mnemazine-release-check.mjs'
   ]
   for (const script of scripts) {
@@ -333,6 +334,7 @@ async function qualityAndPublicChecks() {
   await must('webapp selftest', process.execPath, ['scripts/mnemazine-webapp-server.mjs', '--selftest'])
   await must('telegram bot selftest', process.execPath, ['scripts/mnemazine-telegram-bot.mjs', '--selftest'])
   await must('weekly state selftest', process.execPath, ['scripts/mnemazine-weekly-state.mjs', '--selftest'])
+  await must('live status selftest', process.execPath, ['scripts/mnemazine-live-status.mjs', '--selftest'])
   await must('demo vault quality', 'npm', ['run', 'quality', '--', '--vault', 'demo/vault'])
   await reportQualityGateSmoke()
   await completeGateSmoke()

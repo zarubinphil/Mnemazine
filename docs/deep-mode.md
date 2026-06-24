@@ -3,7 +3,7 @@
 Mnemazine has two operating modes:
 
 - **Conservative (default):** local-only. No network, no LLM, no external services. This is what `node scripts/mnemazine-run.mjs` and `npm run synthesize` do by default.
-- **Deep (opt-in):** uses an LLM agent (Claude by default, Codex at parity) to atomize one source into many focused notes (README "one source → ~20 notes") and to verify claims against their sources.
+- **Deep (opt-in):** uses an LLM agent (auto-select: Claude, otherwise Codex) to atomize one source into many focused notes (README "one source → ~20 notes") and to verify claims against their sources.
 
 Deep mode is **off unless you ask for it**. Nothing in the default pipeline reaches the network or an LLM.
 
@@ -30,13 +30,13 @@ If deep mode is requested directly but no LLM engine is available, plain `node s
 
 ## The LLM bridge
 
-All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). The **code-first engine is Claude** (headless `claude -p`); **Codex is kept at parity** — the same contract, so anything that works via Claude also works via Codex. There is no third LLM client. `mnemazine-codex.mjs` remains as a thin back-compat shim.
+All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). When `MNEMAZINE_LLM` is unset, Mnemazine uses Claude CLI when available and falls back to Codex CLI otherwise. Pin the engine explicitly with `MNEMAZINE_LLM=claude` or `MNEMAZINE_LLM=codex`. There is no third LLM client. `mnemazine-codex.mjs` remains as a thin back-compat shim.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MNEMAZINE_LLM` | `claude` | Engine: `claude` (primary) or `codex` (parity). |
+| `MNEMAZINE_LLM` | auto | Engine: `claude` or `codex`. When unset: Claude if available, otherwise Codex. |
 | `MNEMAZINE_CLAUDE_BIN` | auto-discover | Claude CLI: auto-found via login-shell PATH, common installs (npm/Homebrew/standalone/Desktop), or VSCode. Override to pin. |
 | `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Path to the Codex binary. |
 | `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Per-call timeout. |

@@ -2,7 +2,7 @@
 // Provider-abstracted LLM bridge for Mnemazine. Code-first engine is Claude
 // (headless `claude -p`); Codex is kept at parity (same llmJson contract) so
 // anything that works via Claude also works via Codex.
-//   provider: MNEMAZINE_LLM = 'claude' (default) | 'codex'
+//   provider: MNEMAZINE_LLM = 'claude' | 'codex' (unset = auto: Claude, else Codex)
 // Both run as schema-instructed, web-capable headless agents. Default pipeline
 // never calls either — only the opt-in --deep path does.
 import { spawnSync, spawn } from 'node:child_process'
@@ -27,7 +27,7 @@ function runProc(bin, args, { input, timeoutMs, cwd } = {}) {
   })
 }
 
-const DEFAULT_PROVIDER = process.env.MNEMAZINE_LLM || 'claude'
+const CONFIG_PROVIDER = process.env.MNEMAZINE_LLM || ''
 const TIMEOUT_MS = Number(process.env.MNEMAZINE_LLM_TIMEOUT_MS || '420000')
 const CODEX_BIN = process.env.MNEMAZINE_CODEX_BIN || '/Applications/Codex.app/Contents/Resources/codex'
 
@@ -73,11 +73,18 @@ function binExists(bin) {
   return which.status === 0 && Boolean(which.stdout.trim())
 }
 
-export function activeProvider(opts = {}) {
-  return opts.provider || DEFAULT_PROVIDER
+export function defaultProvider() {
+  if (CONFIG_PROVIDER) return CONFIG_PROVIDER
+  if (binExists(resolveClaudeBin())) return 'claude'
+  if (binExists(CODEX_BIN)) return 'codex'
+  return 'claude'
 }
 
-export function llmAvailable(provider = DEFAULT_PROVIDER) {
+export function activeProvider(opts = {}) {
+  return opts.provider || defaultProvider()
+}
+
+export function llmAvailable(provider = activeProvider()) {
   return provider === 'codex' ? binExists(CODEX_BIN) : binExists(resolveClaudeBin())
 }
 

@@ -32,6 +32,23 @@ if [ ! -f package-lock.json ]; then
   bad "package-lock.json missing; npm audit/ci are not reproducible"
 fi
 
+if [ "${MNEMAZINE_PREFLIGHT_SKIP_LLM:-0}" != "1" ]; then
+  provider_hint="${MNEMAZINE_LLM:-}"
+  if provider="$(node --input-type=module - "$provider_hint" <<'NODE'
+import { activeProvider, llmAvailable } from './scripts/mnemazine-llm.mjs'
+const provider = process.argv[2] || activeProvider()
+if (!llmAvailable(provider)) process.exit(1)
+console.log(provider)
+NODE
+  )"; then
+    ok "llm provider available: $provider"
+  else
+    bad "llm provider unavailable; set MNEMAZINE_LLM=codex or install/configure Claude/Codex"
+  fi
+else
+  warn "llm provider check skipped"
+fi
+
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   dirty="$(git status --porcelain --untracked-files=no)"
   if [ -n "$dirty" ]; then

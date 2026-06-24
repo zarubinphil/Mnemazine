@@ -3,7 +3,7 @@
 У Mnemazine два режима работы:
 
 - **Консервативный (по умолчанию):** только локально. Без сети, без LLM, без внешних сервисов. Так работают `node scripts/mnemazine-run.mjs` и `npm run synthesize` по умолчанию.
-- **Deep (по запросу):** использует LLM-агента (Claude по умолчанию, Codex в паритете), чтобы разбить один источник на много сфокусированных заметок (README «один источник → ~20 заметок») и проверить утверждения по их источникам.
+- **Deep (по запросу):** использует LLM-агента (авто-выбор: Claude, иначе Codex), чтобы разбить один источник на много сфокусированных заметок (README «один источник → ~20 заметок») и проверить утверждения по их источникам.
 
 Deep-режим **выключен, пока вы его не попросите**. Ничто в стандартном конвейере не выходит в сеть и не зовёт LLM.
 
@@ -30,13 +30,13 @@ npm run synthesize -- --deep
 
 ## Мост LLM
 
-Все вызовы LLM идут через один провайдер-абстрактный модуль: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). **Движок в первую очередь — Claude** (headless `claude -p`); **Codex держится в паритете** — тот же контракт, поэтому всё, что работает через Claude, работает и через Codex. Третьего LLM-клиента нет. `mnemazine-codex.mjs` остаётся тонким shim'ом обратной совместимости.
+Все вызовы LLM идут через один провайдер-абстрактный модуль: `scripts/mnemazine-llm.mjs` (`llmJson(prompt, schema, {provider, tools})`). Если `MNEMAZINE_LLM` не задан, Mnemazine берёт Claude CLI, когда он доступен, иначе Codex CLI. Можно зафиксировать движок явно: `MNEMAZINE_LLM=claude` или `MNEMAZINE_LLM=codex`. Третьего LLM-клиента нет. `mnemazine-codex.mjs` остаётся тонким shim'ом обратной совместимости.
 
 ### Переменные окружения
 
 | Переменная | По умолчанию | Назначение |
 |----------|---------|---------|
-| `MNEMAZINE_LLM` | `claude` | Движок: `claude` (primary) или `codex` (паритет). |
+| `MNEMAZINE_LLM` | авто | Движок: `claude` или `codex`. Если не задан — Claude при наличии, иначе Codex. |
 | `MNEMAZINE_CLAUDE_BIN` | авто | Claude CLI: авто-поиск через login-shell PATH, типовые установки (npm/Homebrew/standalone/Desktop), VSCode. Переопределите чтобы зафиксировать. |
 | `MNEMAZINE_CODEX_BIN` | `/Applications/Codex.app/Contents/Resources/codex` | Путь к бинарю Codex. |
 | `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Таймаут одного вызова. |
