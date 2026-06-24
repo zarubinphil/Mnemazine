@@ -1,6 +1,7 @@
 name: release-check
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -22,15 +23,31 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+          cache: npm
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Install npm dependencies
+        run: npm ci
+      - name: Ensure audit tools
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
       - name: Show runtime versions
         run: |
           node --version
           npm --version
           python3 --version
+          rg --version
       - name: Run post-run report smoke
         run: npm run postrun -- --run-id ci-postrun --since-days 30 --reports "$RUNNER_TEMP/mnemazine-postrun" --quiet
-      - name: Run release gate (syntax, demo smoke, public scan, bilingual README parity)
+      - name: Run local security audit
+        run: npm run audit:local
+      - name: Run setup dry-run smoke
+        run: printf '2\n2\n2\n' | MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh
+      - name: Run release test suite
+        run: npm test
+      - name: Run release gate directly
         run: npm run release-check
