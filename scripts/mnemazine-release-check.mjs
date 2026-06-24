@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 
 const ROOT = path.resolve(process.cwd())
@@ -33,6 +34,10 @@ async function must(label, command, args, options = {}) {
 
 async function readJson(file) {
   return JSON.parse(await fs.readFile(file, 'utf8'))
+}
+
+function sha256Text(text) {
+  return crypto.createHash('sha256').update(text).digest('hex')
 }
 
 async function listFiles(dir) {
@@ -76,6 +81,78 @@ async function checkSyntax() {
   }
 }
 
+async function npmAuditCheck() {
+  await must('npm audit', 'npm', ['audit', '--audit-level=moderate'])
+}
+
+async function desktopDryRunSmoke() {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-desktop-dry-'))
+  const inbox = path.join(temp, 'live-inbox')
+  const vault = path.join(temp, 'live-vault')
+  await fs.mkdir(inbox, { recursive: true })
+  await fs.mkdir(vault, { recursive: true })
+  await fs.writeFile(path.join(inbox, 'live-source.md'), '# Live source\n\nMust stay in live inbox.\n', 'utf8')
+  await must('desktop protocol dry-run', 'bash', ['scripts/mnemazine-desktop-protocol.sh', '--dry-run'], {
+    env: {
+      MNEMAZINE_INBOX: inbox,
+      MNEMAZINE_VAULT: vault
+    }
+  })
+  if (!existsSync(path.join(inbox, 'live-source.md'))) throw new Error('desktop dry-run smoke failed: live inbox file changed')
+  const vaultFiles = await listFiles(vault)
+  if (vaultFiles.length) throw new Error(`desktop dry-run smoke failed: live vault changed (${vaultFiles.join(', ')})`)
+}
+
+async function pollRetrySmoke() {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-poll-retry-'))
+  const bin = path.join(temp, 'bin')
+  const state = path.join(temp, 'state')
+  await fs.mkdir(bin, { recursive: true })
+  await fs.mkdir(state, { recursive: true })
+  await fs.mkdir(path.join(temp, '.mnemazine'), { recursive: true })
+  await fs.writeFile(path.join(temp, '.mnemazine', 'known_hosts'), 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKpinnedHostKeyForReleaseSmokeOnly1234567890\n', 'utf8')
+  await fs.writeFile(path.join(bin, 'ssh'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 })
+  await fs.writeFile(path.join(bin, 'sync.sh'), `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p ${JSON.stringify(state)}
+count_file=${JSON.stringify(path.join(state, 'count'))}
+count="$(cat "$count_file" 2>/dev/null || echo 0)"
+count=$((count + 1))
+echo "$count" > "$count_file"
+if [ -f ${JSON.stringify(path.join(state, 'fail'))} ]; then exit 1; fi
+exit 0
+`, { mode: 0o755 })
+  await fs.writeFile(path.join(state, 'fail'), '1', 'utf8')
+  const env = {
+    MNEMAZINE_ROOT: temp,
+    MNEMAZINE_VPS: 'deploy@example.test',
+    MNEMAZINE_VPS_KEY: path.join(temp, 'missing-key'),
+    MNEMAZINE_REMOTE_MUTATION: '1',
+    MNEMAZINE_SSH_BIN: path.join(bin, 'ssh'),
+    MNEMAZINE_TELEGRAM_SYNC_BIN: path.join(bin, 'sync.sh'),
+    MNEMAZINE_POLL_TODAY: '2099-01-01',
+    MNEMAZINE_POLL_HOUR: '9',
+    MNEMAZINE_DAILY_RETRY_SECONDS: '60',
+    MNEMAZINE_DAILY_MAX_ATTEMPTS: '2'
+  }
+  const first = await run('bash', ['scripts/mnemazine-telegram-poll.sh'], { env: { ...env, MNEMAZINE_POLL_EPOCH: '1000' } })
+  if (first.code === 0) throw new Error('poll retry smoke failed: first failing sync passed')
+  if (await fs.readFile(path.join(state, 'count'), 'utf8') !== '1\n') throw new Error('poll retry smoke failed: first attempt not counted')
+  if (existsSync(path.join(temp, '.mnemazine', '.last-daily-completed'))) throw new Error('poll retry smoke failed: failure marked completed')
+
+  await must('poll retry smoke:no early retry', 'bash', ['scripts/mnemazine-telegram-poll.sh'], { env: { ...env, MNEMAZINE_POLL_EPOCH: '1010' } })
+  if (await fs.readFile(path.join(state, 'count'), 'utf8') !== '1\n') throw new Error('poll retry smoke failed: retried before backoff')
+
+  await fs.unlink(path.join(state, 'fail'))
+  await must('poll retry smoke:retry success', 'bash', ['scripts/mnemazine-telegram-poll.sh'], { env: { ...env, MNEMAZINE_POLL_EPOCH: '1061' } })
+  if (await fs.readFile(path.join(state, 'count'), 'utf8') !== '2\n') throw new Error('poll retry smoke failed: retry did not run')
+  const completed = await fs.readFile(path.join(temp, '.mnemazine', '.last-daily-completed'), 'utf8')
+  if (completed.trim() !== '2099-01-01') throw new Error('poll retry smoke failed: success not marked completed')
+
+  await must('poll retry smoke:no rerun after complete', 'bash', ['scripts/mnemazine-telegram-poll.sh'], { env: { ...env, MNEMAZINE_POLL_EPOCH: '2000' } })
+  if (await fs.readFile(path.join(state, 'count'), 'utf8') !== '2\n') throw new Error('poll retry smoke failed: completed daily reran')
+}
+
 async function demoSmoke() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-release-'))
   const inbox = path.join(temp, 'inbox')
@@ -101,7 +178,9 @@ async function demoSmoke() {
   })
 
   const inboxFiles = await fs.readdir(inbox)
-  if (inboxFiles.length !== 0) throw new Error(`demo smoke failed: inbox not empty (${inboxFiles.join(', ')})`)
+  if (inboxFiles.length !== 1 || inboxFiles[0] !== 'empty-source.bin') {
+    throw new Error(`demo smoke failed: expected only unextractable source in inbox (${inboxFiles.join(', ')})`)
+  }
 
   const notes = (await listFiles(vault))
     .filter(file => file.endsWith('.md'))
@@ -117,7 +196,7 @@ async function demoSmoke() {
   }
 
   const archived = await listFiles(path.join(temp, '.mnemazine/archive'))
-  if (archived.length !== 2) throw new Error(`demo smoke failed: expected 2 archived sources, got ${archived.length}`)
+  if (archived.length !== 1) throw new Error(`demo smoke failed: expected 1 archived finalized source, got ${archived.length}`)
 
   const extractRecords = (await listFiles(path.join(temp, '.mnemazine/cache/extracted'))).filter(file => file.endsWith('.json'))
   if (extractRecords.length !== 2) throw new Error(`demo smoke failed: expected 2 extract records, got ${extractRecords.length}`)
@@ -134,12 +213,126 @@ async function demoSmoke() {
     }
   })
   const cachedInboxFiles = await fs.readdir(inbox)
-  if (cachedInboxFiles.length !== 0) throw new Error(`demo cached smoke failed: inbox not empty (${cachedInboxFiles.join(', ')})`)
+  if (cachedInboxFiles.length !== 1 || cachedInboxFiles[0] !== 'empty-source.bin') {
+    throw new Error(`demo cached smoke failed: expected only unextractable source in inbox (${cachedInboxFiles.join(', ')})`)
+  }
   const archivedAfterCachedRun = await listFiles(path.join(temp, '.mnemazine/archive'))
-  if (archivedAfterCachedRun.length !== 3) throw new Error(`demo cached smoke failed: expected 3 archived sources, got ${archivedAfterCachedRun.length}`)
+  if (archivedAfterCachedRun.length !== 2) throw new Error(`demo cached smoke failed: expected 2 archived finalized sources, got ${archivedAfterCachedRun.length}`)
+}
+
+async function strictArchiveGateSmoke() {
+  async function writeCachedCase(temp, noteBody) {
+    const inbox = path.join(temp, 'inbox')
+    const vault = path.join(temp, 'vault')
+    const scripts = path.join(temp, 'scripts')
+    const extracts = path.join(temp, '.mnemazine/cache/extracted')
+    await fs.mkdir(inbox, { recursive: true })
+    await fs.mkdir(path.join(vault, '01 Concepts'), { recursive: true })
+    await fs.mkdir(scripts, { recursive: true })
+    await fs.mkdir(extracts, { recursive: true })
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs'), path.join(scripts, 'mnemazine-vault-quality-gate.mjs'))
+
+    const source = 'MarkItDown converts Office/PDF/image inputs into Markdown for LLM pipelines. This cached source has enough text for synthesis.'
+    const hash = sha256Text(source)
+    const ref = `local-media:${hash.slice(0, 16)}`
+    await fs.writeFile(path.join(inbox, 'source.md'), source, 'utf8')
+    await fs.writeFile(path.join(extracts, `${hash}.txt`), source, 'utf8')
+    await fs.writeFile(path.join(extracts, `${hash}.json`), JSON.stringify({ source_ref: ref, status: 'extracted_for_note', text_path: `${hash}.txt` }, null, 2), 'utf8')
+    await fs.mkdir(path.join(temp, '.mnemazine/cache'), { recursive: true })
+    await fs.writeFile(path.join(temp, '.mnemazine/cache/processed-hashes.json'), JSON.stringify({
+      [hash]: { status: 'extracted_for_note', source_ref: ref, cache: `.mnemazine/cache/extracted/${hash}.json` }
+    }, null, 2), 'utf8')
+    await fs.writeFile(path.join(vault, '01 Concepts', 'cached-note.md'), noteBody(ref), 'utf8')
+    return { inbox, vault, sourceFile: path.join(inbox, 'source.md') }
+  }
+
+  const weakTemp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-strict-weak-'))
+  const weak = await writeCachedCase(weakTemp, ref => `---
+title: "Weak cached note"
+type: "knowledge-note"
+verified: false
+verification_status: "unknown"
+status: "draft"
+enrichment: "missing"
+---
+
+# Weak cached note
+
+## What This Is
+
+Cached OCR-like material, not final knowledge.
+
+## Source
+
+Local source refs:
+- ${ref}
+
+Public/source expansion:
+- No public source detected.
+`)
+  const weakRun = await run(process.execPath, ['scripts/mnemazine-run.mjs'], {
+    env: {
+      MNEMAZINE_ROOT: weakTemp,
+      MNEMAZINE_INBOX: weak.inbox,
+      MNEMAZINE_VAULT: weak.vault,
+      MNEMAZINE_DEEP: '1',
+      MNEMAZINE_REQUIRE_DEEP: '1',
+      MNEMAZINE_SYNTHESIZE: '0',
+      MNEMAZINE_FINISH: '0'
+    }
+  })
+  if (weakRun.code === 0) throw new Error('strict archive gate smoke failed: weak cached note passed')
+  if (!existsSync(weak.sourceFile)) throw new Error('strict archive gate smoke failed: weak cached source was archived')
+
+  const goodTemp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-strict-good-'))
+  const good = await writeCachedCase(goodTemp, ref => `---
+title: "Verified enriched cached note"
+type: "knowledge-note"
+verified: true
+verification_status: "verified"
+status: "final"
+enrichment: "external-research"
+---
+
+# Verified enriched cached note
+
+## What This Is
+
+MarkItDown is verified here as reusable knowledge, not raw OCR.
+
+## Source
+
+Local source refs:
+- ${ref}
+
+Public/source expansion:
+- Microsoft MarkItDown: https://github.com/microsoft/markitdown
+
+## Enrichment
+
+External facts added before atomization:
+- Microsoft maintains MarkItDown as an open-source file-to-Markdown converter.
+- The public repository documents optional extras for additional input formats.
+`)
+  await must('strict archive gate smoke:good', process.execPath, ['scripts/mnemazine-run.mjs'], {
+    env: {
+      MNEMAZINE_ROOT: goodTemp,
+      MNEMAZINE_INBOX: good.inbox,
+      MNEMAZINE_VAULT: good.vault,
+      MNEMAZINE_DEEP: '1',
+      MNEMAZINE_REQUIRE_DEEP: '1',
+      MNEMAZINE_SYNTHESIZE: '0',
+      MNEMAZINE_FINISH: '0'
+    }
+  })
+  if (existsSync(good.sourceFile)) throw new Error('strict archive gate smoke failed: verified cached source stayed in inbox')
 }
 
 async function qualityAndPublicChecks() {
+  await must('verify selftest', process.execPath, ['scripts/mnemazine-verify.mjs', '--selftest'])
+  await must('webapp selftest', process.execPath, ['scripts/mnemazine-webapp-server.mjs', '--selftest'])
+  await must('telegram bot selftest', process.execPath, ['scripts/mnemazine-telegram-bot.mjs', '--selftest'])
+  await must('weekly state selftest', process.execPath, ['scripts/mnemazine-weekly-state.mjs', '--selftest'])
   await must('demo vault quality', 'npm', ['run', 'quality', '--', '--vault', 'demo/vault'])
   await reportQualityGateSmoke()
   await completeGateSmoke()
@@ -251,7 +444,11 @@ async function repoMetadataCheck() {
 async function main() {
   const checks = [
     ['syntax', checkSyntax],
+    ['npm-audit', npmAuditCheck],
+    ['desktop-dry-run', desktopDryRunSmoke],
+    ['poll-retry', pollRetrySmoke],
     ['demo-smoke', demoSmoke],
+    ['strict-archive-gate', strictArchiveGateSmoke],
     ['quality-public', qualityAndPublicChecks],
     ['search-eval', searchEvalSmoke],
     ['repo-metadata', repoMetadataCheck]

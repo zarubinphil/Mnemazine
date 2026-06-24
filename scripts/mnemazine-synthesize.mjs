@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { llmAvailable, llmJson, fenceUntrusted } from './mnemazine-llm.mjs'
-import { verifyLocal, verifyDeep } from './mnemazine-verify.mjs'
+import { verifyLocal, verifyDeep, isPublicHttpUrl } from './mnemazine-verify.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -25,8 +25,19 @@ const DEEP = argv.includes('--deep') || argv.includes('--atomize') || process.en
 const MAX_ATOMS = Number(arg('max-atoms', process.env.MNEMAZINE_MAX_ATOMS || '20'))
 // Enrichment is on within --deep unless explicitly disabled (it needs the network).
 const ENRICH = DEEP && process.env.MNEMAZINE_ENRICH !== '0' && !argv.includes('--no-enrich')
+const ENRICH_TIMEOUT_MS = Number(process.env.MNEMAZINE_ENRICH_TIMEOUT_MS || '60000')
+const STRICT_ENRICH = DEEP && process.env.MNEMAZINE_STRICT_ENRICH !== '0' && !argv.includes('--allow-raw-atomize')
+const MIN_ADDED_FACTS = Number(process.env.MNEMAZINE_MIN_ADDED_FACTS || '2')
+const CLUSTER_CHUNK_SIZE = Number(arg('cluster-chunk-size', process.env.MNEMAZINE_CLUSTER_CHUNK_SIZE || '25'))
+const SOURCE_REF_FILTER = new Set(String(process.env.MNEMAZINE_SYNTH_SOURCE_REFS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean))
 
 const sourceHints = [
+  { re: /supermemory/i, name: 'supermemory GitHub', url: 'https://github.com/supermemoryai/supermemory' },
+  { re: /compound\s+engineer|compound-\s*engineering-plugin/i, name: 'Compound Engineering GitHub', url: 'https://github.com/EveryInc/compound-engineering-plugin' },
+  { re: /taste\s+skill|taste-skill|anti-slop\s+frontend/i, name: 'Taste Skill GitHub', url: 'https://github.com/Leonxlnx/taste-skill' },
   { re: /mcp|model context protocol|filesystem mcp|memory mcp|zapier/i, name: 'Model Context Protocol docs', url: 'https://modelcontextprotocol.io/docs/getting-started/intro' },
   { re: /skill|skills|claude code|agent skill|subagent/i, name: 'Anthropic Agent Skills', url: 'https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills' },
   { re: /spec|spec-driven|feature forge|requirements/i, name: 'GitHub Spec Kit', url: 'https://github.com/github/spec-kit' },
@@ -142,9 +153,13 @@ function fingerprint(cluster) {
 }
 
 function extractUrls(text) {
-  return uniq(String(text || '').match(/\bhttps?:\/\/[^\s)]+/g) || [])
+  const raw = String(text || '')
+  const explicit = raw.match(/\bhttps?:\/\/[^\s)]+/g) || []
+  const bareGithub = [...raw.matchAll(/\bgithub\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/g)]
+    .map(match => `https://${match[0]}`)
+  return uniq([...explicit, ...bareGithub])
     .map(url => url.replace(/[.,;]+$/, ''))
-    .filter(url => !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)([:/]|$)/i.test(url))
+    .filter(isPublicHttpUrl)
     .slice(0, 8)
 }
 
@@ -179,8 +194,173 @@ function publicSources(text) {
     .filter(source => source.re.test(text))
     .map(({ name, url }) => ({ name, url }))
   const byUrl = new Map()
-  for (const source of [...explicit, ...hinted]) byUrl.set(source.url, source)
+  for (const source of [...explicit, ...hinted]) {
+    if (isPublicHttpUrl(source.url)) byUrl.set(source.url, source)
+  }
   return [...byUrl.values()].slice(0, 10)
+}
+
+function githubRepoFromUrl(url) {
+  let parsed
+  try { parsed = new URL(url) } catch { return null }
+  if (parsed.hostname.replace(/^www\./, '') !== 'github.com') return null
+  const [, owner, repo] = parsed.pathname.split('/')
+  if (!owner || !repo) return null
+  const cleanOwner = owner.replace(/^Leonx1nx$/i, 'Leonxlnx')
+  const cleanRepo = repo.replace(/\.git$/i, '')
+  if (cleanRepo.endsWith('-')) return null
+  return { owner: cleanOwner, repo: cleanRepo, url: `https://github.com/${cleanOwner}/${cleanRepo}` }
+}
+
+async function fetchJson(url) {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mnemazine' } })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+async function fetchText(url, limit = 40000) {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mnemazine' } })
+    if (!res.ok) return ''
+    return (await res.text()).slice(0, limit)
+  } catch {
+    return ''
+  }
+}
+
+function readmePoints(readme, max = 6) {
+  const points = []
+  for (const line of String(readme || '').split('\n')) {
+    const clean = compact(line.replace(/^#+\s*/, '').replace(/^[-*]\s+/, ''), 220)
+    if (clean.length < 32) continue
+    if (/^(install|usage|license|contributing|table of contents|badges?)$/i.test(clean)) continue
+    if (/^!\[|^<img|^\[!?\[/.test(line.trim())) continue
+    points.push(clean)
+    if (points.length >= max) break
+  }
+  return points
+}
+
+function htmlDescription(html) {
+  const raw = String(html || '')
+  const hit = raw.match(/<meta\s+name="description"\s+content="([^"]+)"/i) ||
+    raw.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i)
+  return hit ? compact(hit[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'), 260) : ''
+}
+
+async function fetchRawReadme(repoRef, preferredBranch = '') {
+  const branches = [preferredBranch, 'main', 'master', 'dev', 'trunk'].filter(Boolean)
+  const names = ['README.md', 'readme.md', 'README.MD']
+  for (const branch of branches) {
+    for (const name of names) {
+      const url = `https://raw.githubusercontent.com/${repoRef.owner}/${repoRef.repo}/${branch}/${name}`
+      const text = await fetchText(url)
+      if (text && !/^404:/i.test(text)) return { text, url }
+    }
+  }
+  return { text: '', url: `https://github.com/${repoRef.owner}/${repoRef.repo}#readme` }
+}
+
+async function enrichClusterFromGithub(cluster, sources) {
+  const repoRef = sources.map(source => githubRepoFromUrl(source.url)).find(Boolean)
+  if (!repoRef) return null
+  let api = await fetchJson(`https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}`)
+  const readmeMeta = api?.html_url ? await fetchJson(`https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/readme`) : null
+  const rawReadme = readmeMeta?.download_url
+    ? { text: await fetchText(readmeMeta.download_url), url: readmeMeta.download_url }
+    : await fetchRawReadme(repoRef, api?.default_branch || '')
+  const repoHtml = api?.html_url ? '' : await fetchText(repoRef.url, 60000)
+  if (!api?.html_url) {
+    if (!rawReadme.text && !repoHtml) return null
+    api = {
+      full_name: `${repoRef.owner}/${repoRef.repo}`,
+      html_url: repoRef.url,
+      description: htmlDescription(repoHtml) || readmePoints(rawReadme.text, 1)[0] || 'official GitHub repository',
+      stargazers_count: 'unknown',
+      forks_count: 'unknown',
+      open_issues_count: 'unknown',
+      license: null,
+      language: 'unknown',
+      pushed_at: '',
+      default_branch: 'unknown'
+    }
+  }
+  const readmeUrl = rawReadme.url
+  const readme = rawReadme.text
+  const release = await fetchJson(`https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/releases/latest`)
+  const points = readmePoints(readme)
+  const license = api.license?.spdx_id || api.license?.name || 'unknown license'
+  const pushed = api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'
+  const releaseLine = release?.tag_name ? `${release.tag_name} (${String(release.published_at || '').slice(0, 10) || 'date unknown'})` : 'no latest release returned by GitHub API'
+  const addedFacts = [
+    `${api.full_name}: ${api.description || 'official GitHub repository'}.`,
+    `GitHub metadata: ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, primary language ${api.language || 'unknown'}.`,
+    `Repository freshness: default branch ${api.default_branch || 'unknown'}, last push ${pushed}, latest release ${releaseLine}.`,
+    ...points.slice(0, 5).map(point => `README signal: ${point}`)
+  ]
+  const addedSources = [
+    api.html_url,
+    readmeUrl,
+    release?.html_url
+  ].filter(Boolean)
+  const enriched = [
+    `Official GitHub enrichment for ${api.full_name}.`,
+    `Description: ${api.description || 'No GitHub description provided.'}`,
+    `Metadata: ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, ${api.language || 'unknown'} language, pushed ${pushed}.`,
+    `Latest release: ${releaseLine}.`,
+    points.length ? `README extracted signals:\n${points.map(point => `- ${point}`).join('\n')}` : 'README extraction returned no stable feature bullets.',
+    `Local seed refs: ${cluster.records.map(r => r.source_ref).join(', ')}.`
+  ].join('\n\n')
+  return { enriched, addedSources, addedFacts, github: { api, readmeUrl, release, points } }
+}
+
+function atomsFromGithub(part, sources) {
+  const github = part.enrichment?.github
+  if (!github?.api) return []
+  const api = github.api
+  const repo = api.full_name
+  const sourceUrls = [api.html_url, github.readmeUrl, github.release?.html_url].filter(Boolean)
+  const points = github.points || []
+  const license = api.license?.spdx_id || api.license?.name || 'unknown license'
+  const releaseLine = github.release?.tag_name || 'no latest release returned'
+  return [
+    {
+      title: `${repo}: verified tool identity and adoption signal`,
+      what: `${repo} is the official GitHub repository for ${api.description || 'the tool captured in the local source'}. GitHub reports ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, primary language ${api.language || 'unknown'}, and last push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}.`,
+      why: 'This turns a screenshot/star-count capture into a checked adoption signal with a primary source, not unchecked extraction.',
+      how: ['Use the repo metadata as the first pass: license, freshness, stars, forks, issues.', 'Open the README before adopting; treat social-card claims as hints until repo/docs confirm them.', 'Record adoption decision separately: install now, trial later, or ignore.'],
+      sources: sourceUrls,
+      next: `Review ${repo} README and decide whether it belongs in the agent capability registry.`
+    },
+    {
+      title: `${repo}: README-backed capability summary`,
+      what: points.length ? points.slice(0, 4).join(' ') : `${repo} has an official README, but Mnemazine could not extract stable feature bullets from it.`,
+      why: 'README text is closer to operational truth than a screenshot caption. It tells what the maintainer actually ships and documents.',
+      how: points.slice(0, 5).map(point => `Check: ${point}`),
+      sources: sourceUrls,
+      next: `Map ${repo} README features to one concrete local workflow before installing.`
+    },
+    {
+      title: `${repo}: operational risk and maintenance check`,
+      what: `Risk surface: ${api.open_issues_count} open issues, latest release ${releaseLine}, last push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}, license ${license}.`,
+      why: 'A popular repo can still be a bad dependency if release cadence, license, or issue volume do not fit the workflow.',
+      how: ['Check open issues for security, data-loss, and install failures.', 'Prefer trial in a disposable workspace before adding it to global agent rules.', 'If it becomes a Skill/MCP/plugin, register usage and source ledgers.'],
+      sources: sourceUrls,
+      next: `Run a small local trial for ${repo} only if the workflow fit is concrete.`
+    },
+    {
+      title: `${repo}: Mnemazine routing decision`,
+      what: `This atom links the local capture (${part.records.map(record => record.source_ref).join(', ')}) to primary GitHub evidence for ${repo}.`,
+      why: 'The useful memory is not "saw a repo". The useful memory is the routing decision: what the repo does, whether it fits, what risk remains, and what action follows.',
+      how: ['Store the repo as a candidate capability, not an instruction to install.', 'If adopted, mirror docs/skill metadata and log usage.', 'If rejected, record the reason so the same shiny repo does not return as noise.'],
+      sources: sourceUrls,
+      next: `Add ${repo} to the capability review queue with one accept/reject criterion.`
+    }
+  ]
 }
 
 function recordTitle(record) {
@@ -227,6 +407,7 @@ async function listRecords() {
       continue
     }
     if (record.status !== 'extracted_for_note' || !record.text_path) continue
+    if (SOURCE_REF_FILTER.size && !SOURCE_REF_FILTER.has(record.source_ref)) continue
     const textFile = path.join(EXTRACTS, record.text_path)
     const text = await fs.readFile(textFile, 'utf8').catch(() => '')
     if (compact(text, 100).length < 40) continue
@@ -346,7 +527,7 @@ function atomPrompt(cluster, sources, materialOverride) {
     ? String(materialOverride).slice(0, 28000)
     : cluster.records.map(r => compact(r.text, 4000)).join('\n---\n').slice(0, 24000)
   const urls = sources.map(s => s.url).join(', ') || 'none detected'
-  return `You are Mnemazine's atomization agent. Split the raw material below into FOCUSED, atomic knowledge notes — one idea per atom, up to ${MAX_ATOMS}. Do NOT merge unrelated ideas; do NOT invent facts not present in the material. Each atom: a precise title, a one-paragraph "what", a one-paragraph "why it matters", 2-5 concrete "how to use" bullets, one "next action", and the subset of source URLs that support it (from: ${urls}; [] if none).
+  return `You are Mnemazine's atomization agent. Split the enriched research material below into FOCUSED, atomic knowledge notes — one idea per atom, up to ${MAX_ATOMS}. Do NOT merge unrelated ideas; do NOT invent facts not present in the material. Each atom: a precise title, a one-paragraph "what", a one-paragraph "why it matters", 2-5 concrete "how to use" bullets, one "next action", and the subset of source URLs that support it (from: ${urls}; [] only if truly local/private).
 
 Return ONLY JSON matching the schema.
 
@@ -389,11 +570,13 @@ ${fenceUntrusted('MATERIAL', text)}`
 async function enrichCluster(cluster, sources) {
   const text = cluster.records.map(r => compact(r.text, 6000)).join('\n---\n').slice(0, 24000)
   const res = await llmJson(enrichPrompt(text, sources), ENRICH_SCHEMA, {
-    tools: ['WebSearch', 'WebFetch', 'mcp__firecrawl', 'mcp__tavily']
+    tools: ['WebSearch', 'WebFetch', 'mcp__firecrawl', 'mcp__tavily'],
+    timeoutMs: ENRICH_TIMEOUT_MS
   })
   const enriched = typeof res?.enriched === 'string' ? res.enriched.trim() : ''
-  const addedSources = Array.isArray(res?.sources) ? res.sources.filter(Boolean) : []
-  return { enriched, addedSources }
+  const addedSources = Array.isArray(res?.sources) ? res.sources.filter(isPublicHttpUrl) : []
+  const addedFacts = Array.isArray(res?.added_facts) ? res.added_facts.filter(Boolean) : []
+  return { enriched, addedSources, addedFacts }
 }
 
 function atomFingerprint(atom, clusterId = '') {
@@ -405,7 +588,9 @@ function atomFingerprint(atom, clusterId = '') {
 
 function makeAtomNote(cluster, atom, verdict) {
   const how = (atom.how || []).filter(Boolean).map(h => `- ${compact(h, 240)}`).join('\n') || '- Review and apply in context.'
-  const srcs = (atom.sources || []).filter(Boolean)
+  const sourceRefs = cluster.records.map(record => `- ${record.source_ref}`).join('\n')
+  const addedFacts = (cluster.enrichment?.addedFacts || []).map(f => `- ${compact(f, 300)}`).join('\n') || '- No external enrichment facts recorded.'
+  const srcs = (atom.sources || []).filter(isPublicHttpUrl)
   const sourceLines = srcs.length
     ? srcs.map(u => `- ${hostOf(u) || 'Source'}: ${u}`).join('\n')
     : '- No public source detected; external verification required before operational adoption.'
@@ -421,6 +606,7 @@ verified: ${isVerified}
 verification_status: "${v.status}"
 verification: "llm-atomized; ${String(v.note || 'sources unverified').replace(/"/g, "'")}"
 status: "${isVerified ? 'final' : 'draft'}"
+enrichment: "${cluster.enrichment?.ok ? 'external-research' : 'missing'}"
 cluster_id: "${cluster.id}"
 cluster_fingerprint: "${fp}"
 ---
@@ -441,7 +627,16 @@ ${how}
 
 ## Source
 
+Local source refs:
+${sourceRefs}
+
+Public/source expansion:
 ${sourceLines}
+
+## Enrichment
+
+External facts added before atomization:
+${addedFacts}
 
 ## Verification
 
@@ -475,9 +670,15 @@ let written = 0
 let skipped = 0
 let atomized = 0
 let enriched_clusters = 0
+let failed_parts = 0
 const useAtomize = DEEP && llmAvailable()
 if (DEEP && !llmAvailable()) {
   console.error('[synthesize] --deep requested but LLM unavailable; falling back to local template synthesis')
+  if (STRICT_ENRICH) {
+    console.error('[synthesize] strict enrichment requires an available LLM')
+    console.log(JSON.stringify({ ok: false, degraded: true, records: records.length, clusters: clusters.size, written: 0, atomized: 0, enriched: 0, failed_parts: clusters.size, skipped: 0 }, null, 2))
+    process.exit(1)
+  }
 }
 // Bounded-concurrency pool — the research swarm. Each part is an independent
 // agent task; one failing never blocks the others (each is try/caught inside).
@@ -497,31 +698,48 @@ async function processPart(part, parts, index) {
       let material
       if (ENRICH) {
         try {
-          const { enriched, addedSources } = await enrichCluster(part, sources)
+          const github = await enrichClusterFromGithub(part, sources)
+          const { enriched, addedSources, addedFacts } = github || await enrichCluster(part, sources)
           if (enriched && enriched.length > 200) {
             material = enriched
             for (const u of addedSources) if (!sources.some(s => s.url === u)) sources.push({ name: hostOf(u) || 'Source', url: u })
+            part.enrichment = { ok: true, addedFacts, addedSources, deterministic: Boolean(github), github: github?.github || null }
             enriched_clusters += 1
           }
         } catch (err) {
-          console.error(`[synthesize] enrich failed for cluster ${part.id}: ${err.message}; atomizing raw capture`)
+          console.error(`[synthesize] enrich failed for cluster ${part.id}: ${err.message}`)
         }
       }
-      const atoms = await atomizeCluster(part, sources, material)
+      if (STRICT_ENRICH && (!material || !part.enrichment?.ok || (part.enrichment.addedFacts || []).length < MIN_ADDED_FACTS || !sources.length)) {
+        throw new Error(`strict enrichment failed for cluster ${part.id}: no expanded material with external facts/sources`)
+      }
+      const atoms = part.enrichment?.deterministic
+        ? atomsFromGithub(part, sources)
+        : await atomizeCluster(part, sources, material)
       let wroteAtom = false
+      const allowedSourceUrls = new Set(sources.map(source => source.url).filter(isPublicHttpUrl))
       for (const atom of atoms) {
+        atom.sources = (atom.sources || []).filter(url => allowedSourceUrls.has(url))
         const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
         if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
-        const verdict = DEEP
-          ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
-          : verifyLocal(atom.sources)
+        const verdict = part.enrichment?.deterministic
+          ? { status: 'verified', checked: atom.sources || [], evidence: 'Fetched GitHub API/README/release for primary-source enrichment.', note: 'deterministic GitHub source check' }
+          : DEEP
+            ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
+            : verifyLocal(atom.sources)
+        if (STRICT_ENRICH && verdict.status !== 'verified') {
+          console.error(`[synthesize] strict verification rejected atom "${atom.title}": ${verdict.status}`)
+          continue
+        }
         await fs.writeFile(out, makeAtomNote(part, atom, verdict), 'utf8')
         atomized += 1
         wroteAtom = true
       }
       if (wroteAtom) return // atomized this cluster — skip the template note
+      if (STRICT_ENRICH) throw new Error(`strict verification failed for cluster ${part.id}: no verified atoms`)
       console.error(`[synthesize] atomize produced no atoms for cluster ${part.id}; using template note`)
     } catch (err) {
+      if (STRICT_ENRICH) throw err
       console.error(`[synthesize] atomize failed for cluster ${part.id}: ${err.message}; using template note`)
     }
   }
@@ -537,7 +755,7 @@ async function processPart(part, parts, index) {
 
 const tasks = []
 for (const cluster of clusters.values()) {
-  const parts = chunks(cluster.records, 25)
+  const parts = chunks(cluster.records, CLUSTER_CHUNK_SIZE)
   parts.forEach((recs, index) => {
     const part = { ...cluster, records: recs, part: index + 1, partCount: parts.length }
     const textSize = part.records.reduce((sum, record) => sum + compact(record.text, 100000).length, 0)
@@ -551,10 +769,12 @@ const CONCURRENCY = Number(arg('concurrency', process.env.MNEMAZINE_CONCURRENCY 
 await mapLimit(tasks, useAtomize ? CONCURRENCY : 1, async ({ part, parts, index }) => {
   // Outer guard: a part must never break the swarm, even on an unexpected throw.
   try { await processPart(part, parts, index) }
-  catch (err) { console.error(`[synthesize] part failed for cluster ${part.id}: ${err.message}`) }
+  catch (err) { failed_parts += 1; console.error(`[synthesize] part failed for cluster ${part.id}: ${err.message}`) }
 })
 
 // degraded: --deep was requested but the deep path could not run (codex absent),
 // so the run silently fell back to local templates. Callers can detect this.
 const degraded = DEEP && !llmAvailable()
-console.log(JSON.stringify({ ok: true, degraded, records: records.length, clusters: clusters.size, written, atomized, enriched: enriched_clusters, skipped }, null, 2))
+const ok = !(STRICT_ENRICH && failed_parts > 0)
+console.log(JSON.stringify({ ok, degraded, records: records.length, clusters: clusters.size, written, atomized, enriched: enriched_clusters, failed_parts, skipped }, null, 2))
+if (!ok) process.exit(1)

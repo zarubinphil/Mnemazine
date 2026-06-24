@@ -25,9 +25,35 @@ function titleOf(text, file) {
   return text.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(file, '.md')
 }
 
+function present(value) {
+  return String(value || '')
+    .replace(/raw\s+ocr/gi, 'локальное извлечение')
+    .replace(/сырой\s+ocr/gi, 'локальное извлечение')
+    .replace(/ocr\s+без\s+синтеза/gi, 'локальное извлечение')
+    .replace(/распознанный\s+текст\s+без\s+обработки/gi, 'локальное извлечение')
+    .replace(/Video keyframe OCR/gi, 'текст с ключевого кадра')
+    .replace(/Video transcript from local Whisper/gi, 'локальная транскрибация')
+    .replace(/\bIMG_\d+(?:\.(?:WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4))?\b/gi, 'локальный визуальный источник')
+    .replace(/\btemp_image[_-][\w.-]+/gi, 'локальный визуальный источник')
+    .replace(/\b[\w.-]+\.(?:WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4)\b/gi, 'локальный медиафайл')
+    .replace(/\S+\.md\b/giu, 'документ')
+    .replace(/\.md\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function presentNotePath(rel) {
+  return present(String(rel || '')
+    .replace(/\.md$/i, '')
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map(part => part.replace(/^\d+\s*/, ''))
+    .join(' / '))
+}
+
 function summaryOf(text) {
   const block = text.match(/## (?:What This Is|Что это|Суть)\s+([\s\S]*?)(\n## |$)/i)?.[1] || text
-  return block.replace(/[#*_`>-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 520)
+  return present(block.replace(/[#*_`>-]/g, '')).slice(0, 520)
 }
 
 function actionOf(text) {
@@ -42,6 +68,7 @@ function linksOf(text) {
     .filter(url => {
       try { new URL(url); return true } catch { return false }
     })
+    .filter(url => !/\.(?:md|png|svg|jpe?g|webp|gif)/i.test(url))
     .slice(0, 4)
 }
 
@@ -54,7 +81,8 @@ for (const file of files) {
   const stat = await fs.stat(file)
   if (stat.mtimeMs < weekAgo) continue
   const text = await fs.readFile(file, 'utf8')
-  cards.push({ file: path.relative(VAULT, file), title: titleOf(text, file), summary: summaryOf(text), action: actionOf(text), links: linksOf(text) })
+  const rel = path.relative(VAULT, file)
+  cards.push({ file: rel, visibleFile: presentNotePath(rel), title: present(titleOf(text, file)), summary: summaryOf(text), action: present(actionOf(text)), links: linksOf(text) })
 }
 
 const html = `<!doctype html>
@@ -78,7 +106,7 @@ main{padding:34px max(18px,6vw) 70px}.grid{display:grid;grid-template-columns:re
 <body>
 <header><section class="hero"><h1>Mnemazine Weekly</h1><p class="lead">Сводка знаний за последние 7 дней: что появилось, что стоит взять в работу, что можно забыть.</p><button id="export" style="margin-top:18px;border:0;background:#fff;color:var(--blue);font-weight:700;border-radius:8px;padding:11px 16px;cursor:pointer">⬇ Скачать weekly-state.json</button></section></header>
 <main><section class="grid">
-${cards.map((c, i) => `<article class="card" data-id="${esc(c.file)}" data-knowledge-atom="${i + 1}"><div class="path">${esc(c.file)}</div><h2>${esc(c.title)}</h2><p><strong>Синтез:</strong> ${esc(c.summary)}</p><p><strong>Расширил источниками:</strong> ${c.links.length ? c.links.map(url => `<a href="${esc(url)}">${esc(new URL(url).hostname.replace(/^www\\./, ''))}</a>`).join(' · ') : `<a href="../vault/${esc(c.file)}">локальная заметка</a>`}</p><p><strong>Где применить:</strong> В связанных проектах, skills, агентных правилах или backlog, если карточка отмечена "В работу".</p><p><strong>Проверка и риск:</strong> Проверить публичные источники перед публикацией или автоматизацией.</p><p><strong>Следующее действие:</strong> ${esc(c.action)}</p><div class="actions"><button data-v="read">Прочитал</button><button data-v="work">В работу</button><button data-v="forget">Забыть</button></div></article>`).join('\n') || '<article class="card" data-knowledge-atom="empty"><h2>За неделю новых заметок нет</h2><p>Положите материалы в inbox и запустите Mnemazine.</p></article>'}
+${cards.map((c, i) => `<article class="card" data-id="${esc(c.visibleFile)}" data-knowledge-atom="${i + 1}"><div class="path">${esc(c.visibleFile)}</div><h2>${esc(c.title)}</h2><p><strong>Синтез:</strong> ${esc(c.summary)}</p><p><strong>Расширил источниками:</strong> ${c.links.length ? c.links.map(url => `<a href="${esc(url)}">${esc(new URL(url).hostname.replace(/^www\\./, ''))}</a>`).join(' · ') : `<span>локальная заметка</span>`}</p><p><strong>Где применить:</strong> В связанных проектах, skills, агентных правилах или backlog, если карточка отмечена "В работу".</p><p><strong>Проверка и риск:</strong> Проверить публичные источники перед публикацией или автоматизацией.</p><p><strong>Следующее действие:</strong> ${esc(c.action)}</p><div class="actions"><button data-v="read">Прочитал</button><button data-v="work">В работу</button><button data-v="forget">Забыть</button></div></article>`).join('\n') || '<article class="card" data-knowledge-atom="empty"><h2>За неделю новых заметок нет</h2><p>Положите материалы в inbox и запустите Mnemazine.</p></article>'}
 </section></main>
 <script>
 const KEY='mnemazine-weekly-state';

@@ -72,6 +72,11 @@ asks where to put the `inbox/` (inside the repo or on the Desktop), and can
 deploy the Telegram bot to a VPS. Preview a run without touching anything:
 `MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh`.
 
+`install.sh` installs Python packages from `requirements.lock` when the lock
+exists. Update policy: edit `requirements.txt`, rebuild/freeze the lock in
+`.venv`, then commit both files. Optional local engines print `DEGRADED: ...`
+instead of pretending to be installed.
+
 Update an existing clone:
 
 ```bash
@@ -150,7 +155,7 @@ The run performs:
 4. deep atomization and source expansion;
 5. final note creation with `source_ref` and `source_hash`;
 6. vault quality gate;
-7. archive move only after atomization/enrichment and quality gates pass;
+7. archive move only after verified enriched atoms and quality gates pass;
 8. guarded Graphify refresh attempt;
 9. weekly HTML report regeneration;
 10. report quality gate for the regenerated weekly HTML;
@@ -158,6 +163,12 @@ The run performs:
 12. visual post-run knowledge report in `reports/`.
 
 `Mnemazine` / `npm start` is the safe default for real inbox work. The lower-level `npm run run` command is for development and demos.
+
+To test the Desktop path without touching the live inbox or vault:
+
+```bash
+npm run protocol:desktop:dry-run
+```
 
 ## Website Ingestion
 
@@ -207,6 +218,8 @@ Every finished note should answer:
 Raw OCR, copied fragments, and messy transcripts are rejected by the quality gate.
 
 The quality gate also rejects common raw-intake residue such as `intake-draft`, `draft-local`, `temp_image_*`, `IMG_*.PNG`, and visible raw image extensions in note content. Graphify output folders and backups are excluded from this note-quality scan.
+
+`npm start` runs this gate only on notes changed during the current inbox run, so old legacy vault debt cannot block archive of newly processed files. Full vault audit stays manual.
 
 Run the gate manually:
 
@@ -352,6 +365,14 @@ npm run release-check
 ```
 
 It checks script syntax, runs a temporary demo intake, verifies archive-after-quality behavior, runs the demo vault quality gate, scans for private markers/secrets, and checks that the public description and both READMEs stay bilingual.
+
+For an offline local audit during development:
+
+```bash
+npm run audit:local
+```
+
+It runs syntax checks, security selftests, `npm audit`, `public-check`, and static scans for dangerous agent/SSH flags and credential-in-URL patterns.
 
 ## License
 

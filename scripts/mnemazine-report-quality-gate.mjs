@@ -26,7 +26,8 @@ const rawMarkers = [
   /draft-local/i,
   /\btemp_image[_-]/i,
   /\bIMG_\d+/,
-  /\.(WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4)\b/i
+  /\.(WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4)\b/i,
+  /\b[\wА-Яа-яЁё ._-]+\.md\b/i
 ]
 
 const requiredSignals = [

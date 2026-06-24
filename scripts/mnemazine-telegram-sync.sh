@@ -10,9 +10,9 @@ REPO="${MNEMAZINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 [ -f "$REPO/.mnemazine/config.env" ] && . "$REPO/.mnemazine/config.env"
 # Non-secret personal overrides (e.g. MNEMAZINE_INBOX), gitignored.
 [ -f "$REPO/.mnemazine/config.local.sh" ] && . "$REPO/.mnemazine/config.local.sh"
-VPS="${MNEMAZINE_VPS:-root@YOUR_VPS_HOST}"
+VPS="${MNEMAZINE_VPS:-deploy@YOUR_VPS_HOST}"
 KEY="${MNEMAZINE_VPS_KEY:-$HOME/.ssh/id_rsa}"
-REMOTE_INBOX="${MNEMAZINE_REMOTE_INBOX:-/var/www/mnemazine-inbox/}"
+REMOTE_INBOX="${MNEMAZINE_REMOTE_INBOX:-mnemazine/inbox/}"
 REMOTE_INBOX="${REMOTE_INBOX%/}/"
 # Inbox honours MNEMAZINE_INBOX (from config.env); defaults to repo-local inbox.
 LOCAL_INBOX="${MNEMAZINE_INBOX:-$REPO/inbox}"
@@ -21,13 +21,25 @@ STAGING="${LOCAL_INBOX}.staging/"
 # Export so the protocol runner reads the same inbox.
 export MNEMAZINE_INBOX="${LOCAL_INBOX%/}"
 
-if [ "$VPS" = "root@YOUR_VPS_HOST" ]; then
+if [ "$VPS" = "deploy@YOUR_VPS_HOST" ]; then
   echo "Set MNEMAZINE_VPS (and MNEMAZINE_VPS_KEY) in $REPO/.mnemazine/config.env" >&2
+  exit 1
+fi
+if [ "${MNEMAZINE_REMOTE_MUTATION:-0}" != "1" ]; then
+  echo "Set MNEMAZINE_REMOTE_MUTATION=1 after reviewing VPS paths; sync deletes remote files only after local success." >&2
   exit 1
 fi
 
 mkdir -p "$LOCAL_INBOX" "$STAGING"
-SSH_E="ssh -i $KEY -o StrictHostKeyChecking=no"
+KNOWN_HOSTS="${MNEMAZINE_SSH_KNOWN_HOSTS:-$REPO/.mnemazine/known_hosts}"
+mkdir -p "$(dirname "$KNOWN_HOSTS")"
+touch "$KNOWN_HOSTS"
+HOST="${VPS#*@}"
+if ! ssh-keygen -F "$HOST" -f "$KNOWN_HOSTS" >/dev/null 2>&1; then
+  echo "VPS host key is not pinned. Run: MNEMAZINE_VPS=$VPS MNEMAZINE_VPS_HOST_FINGERPRINT=SHA256:... bash $REPO/scripts/mnemazine-pin-vps-host.sh" >&2
+  exit 1
+fi
+SSH_E="ssh -i $KEY -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
 
 # Two-phase move (C2: never delete the only copy before processing succeeds).
 # 1) pull into staging WITHOUT deleting on the VPS, resumable on partial transfer.

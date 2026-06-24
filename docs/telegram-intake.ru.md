@@ -23,11 +23,13 @@ LLM-бинарь). Бот живёт на всегда-онлайн хосте, 
                             │   • есть флаг .run-now?   → прогон
                             │   • наступило окно дня?   → прогон
                             ▼
-                  rsync --remove-source-files  (move; хост остаётся тонким)
+                  rsync-копия в локальный staging
                             ▼
                     локальный inbox/  ──▶  npm start  (строгий протокол)
                             ▼
-                          vault/      ──пишет .last-run──▶ статус Mini App
+                          vault/      ──только после success: delete на хосте
+                            │
+                            └─────────пишет .last-run──▶ статус Mini App
 ```
 
 Обратный канал без публичной машины: хост не достучится до машины. Машина
@@ -42,7 +44,7 @@ LLM-бинарь). Бот живёт на всегда-онлайн хосте, 
 | `scripts/mnemazine-webapp-server.mjs` | хост | API Mini App (`/api/status`, `/api/send`, `/api/run`). Верифицирует `initData`, держит allowlist. Ноль зависимостей. |
 | `webapp/index.html` | хост (статика) | UI Mini App. Тема-aware, один файл. |
 | `scripts/mnemazine-telegram-poll.sh` | твоя машина | Тик ~5 мин: флаг run-now / дневное окно → pull + прогон. |
-| `scripts/mnemazine-telegram-sync.sh` | твоя машина | rsync pull (move) + `npm start`. |
+| `scripts/mnemazine-telegram-sync.sh` | твоя машина | rsync-копия в staging + `npm start` + удаление забранных файлов на хосте только после success. |
 | `scripts/com.mnemazine.telegram-sync.plist.template` | твоя машина | launchd-агент (macOS) для тика. |
 
 ## Установка
@@ -103,15 +105,41 @@ sed 's#__REPO__#'"$PWD"'#g' \
 launchctl load ~/Library/LaunchAgents/com.mnemazine.telegram-sync.plist
 ```
 
-Хост/ключ/пути переопределяются через `MNEMAZINE_VPS`, `MNEMAZINE_VPS_KEY`,
-`MNEMAZINE_REMOTE_INBOX`, `MNEMAZINE_ROOT` (см. шапки скриптов). На Linux —
-cron на 5 минут, вызывающий `mnemazine-telegram-poll.sh`.
+Используй отдельного непривилегированного пользователя, например `deploy@host`,
+не привилегированный логин. Дефолтные пути живут в home этого пользователя:
+`mnemazine/inbox`, `mnemazine/reports`, `mnemazine/bot`.
+
+Сначала закрепи SSH host key:
+
+```bash
+MNEMAZINE_VPS=deploy@example.com \
+MNEMAZINE_VPS_HOST_FINGERPRINT=SHA256:... \
+bash scripts/mnemazine-pin-vps-host.sh
+```
+
+Потом положи проверенные настройки в `.mnemazine/config.env`:
+
+```bash
+MNEMAZINE_VPS=deploy@example.com
+MNEMAZINE_VPS_KEY=$HOME/.ssh/id_ed25519_mnemazine
+MNEMAZINE_REMOTE_INBOX=mnemazine/inbox
+MNEMAZINE_REMOTE_MUTATION=1
+```
+
+`MNEMAZINE_REMOTE_MUTATION=1` ставится осознанно: poller потребляет `.run-now`,
+обновляет `.last-run`, а sync удаляет remote-копии только после локального
+успеха. Без этого флага скрипты падают закрыто. На Linux — cron на 5 минут,
+вызывающий `mnemazine-telegram-poll.sh`.
 
 ## Безопасность
 
 - Токен — секрет: env / секрет-стор, никогда не в git.
 - `initData` HMAC-верифицируется токеном бота; проходят только id из allowlist.
 - Бот игнорирует сообщения от всех вне `ALLOWED_CHAT_IDS`.
+- Ротируй bot token, если хост, pm2 env, shell history или логи могли утечь.
+  Ротируй SSH-ключ, если мог утечь пользователь хоста или ключ рабочей машины.
+  Перезакрепляй `known_hosts` только после проверки нового fingerprint через
+  панель провайдера или другой доверенный канал.
 
 ## Селф-тесты
 

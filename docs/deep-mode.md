@@ -24,7 +24,7 @@ MNEMAZINE_DEEP=1 node scripts/mnemazine-run.mjs
 npm run synthesize -- --deep
 ```
 
-For live Desktop Inbox work, use `npm start` or `mnemazine`. It reads local config, enables deep mode, requires atomization + enrichment, and then runs the completion gate.
+For live Desktop Inbox work, use `npm start` or `mnemazine`. It reads local config, enables deep mode, requires atomization + enrichment, and then runs the completion gate. The desktop completion gate checks notes changed during that run; use `npm run quality` for a full vault audit.
 
 If deep mode is requested directly but no LLM engine is available, plain `node scripts/mnemazine-run.mjs --deep` falls back to local template synthesis and reports `degraded: true` in JSON. Strict runs (`--require-deep` or `npm start`) fail before archive.
 
@@ -42,6 +42,7 @@ All LLM calls go through one provider-abstracted module: `scripts/mnemazine-llm.
 | `MNEMAZINE_LLM_TIMEOUT_MS` | `420000` | Per-call timeout. |
 | `MNEMAZINE_DEEP` | unset | `1` enables deep mode (enrich + atomize + verify + digest). |
 | `MNEMAZINE_ENRICH` | `1` within deep | `0` (or `--no-enrich`) skips the enrichment stage. |
+| `MNEMAZINE_STRICT_ARCHIVE` | `1` in strict runs | `0` permits archiving with non-enriched notes. Default strict runs require verified enriched atoms. |
 | `MNEMAZINE_MAX_ATOMS` | `20` | Cap on atoms produced per source cluster. |
 | `MNEMAZINE_CONCURRENCY` | `4` | Swarm size for deep research (parallel agents, bounded). |
 | `MNEMAZINE_OWNER_CONTEXT` | generic | Personal project context for the digest's "why it matters". Or put it in the gitignored `.mnemazine/owner-context.txt`. |
@@ -57,6 +58,8 @@ In deep mode, files/clusters are researched concurrently by a bounded pool of ag
 ### Enrichment (knowledge expansion)
 
 Before atomization, deep mode runs a web-capable LLM agent that **researches and expands** the captured material "as much as is genuinely useful" — primary sources, current facts/versions, practitioner experience — with every added fact tied to a fetched URL (anti-hallucination). Atoms are then built from the **expanded** knowledge, not just the raw capture. Disable with `--no-enrich` / `MNEMAZINE_ENRICH=0`.
+
+Strict runs (`npm start` / `--require-deep`) fail instead of archiving when enrichment or verification is missing. A cached OCR result is never enough.
 
 ### Digest (Russian human-readable summary)
 
@@ -74,6 +77,8 @@ After Graphify, `scripts/mnemazine-digest.mjs` (`npm run digest`) writes a human
 - `assumed` — a source URL is present but was not fetched/checked (the **default local** verdict, zero network);
 - `verified` — only under `--deep`: the source was reachable (HEAD/GET) **and** an LLM web cross-check judged it to support the claim. Such notes get `verified: true` and `status: final`.
 
+In strict runs, only notes with `verified: true`, `verification_status: "verified"`, `enrichment: "external-research"`, public source URLs, and at least two recorded external facts can release an inbox file to archive.
+
 ## Security
 
 ### Untrusted input is fenced
@@ -82,7 +87,7 @@ Extracted material (OCR, transcripts, scraped web text) is **untrusted**. Before
 
 ### Sandbox
 
-The Claude backend runs `claude -p` without `--dangerously-skip-permissions`; unpermitted tools simply do not run. The Codex backend runs headless with the bypass flag the repo's `kb-*-codex.sh` pipeline uses (non-interactive execution needs it). Either way the prompt-layer fencing above is the active mitigation, and tightening a backend sandbox further is a deliberate, separate decision — not required for default (conservative) operation, which never invokes Codex at all.
+The Claude backend runs `claude -p` without the permission-bypass flag; unpermitted tools simply do not run. The Codex backend runs headless with `--sandbox read-only`, `--ask-for-approval never`, and an ephemeral session. Web search is enabled only for deep calls that explicitly request web tools. The prompt-layer fencing above is still required, but the backend sandbox now matches the local-first boundary: inbox content can be analyzed, not executed.
 
 ### Data boundary
 

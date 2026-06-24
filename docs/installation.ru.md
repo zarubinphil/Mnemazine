@@ -10,6 +10,18 @@ cd "$HOME/Desktop/Mnemazine"
 bash install.sh
 ```
 
+Пошаговый режим:
+
+```bash
+bash setup.sh
+```
+
+Прогон без изменений:
+
+```bash
+MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh
+```
+
 Установщик создаёт:
 
 - `inbox/`;
@@ -38,6 +50,24 @@ xcode-select --install
 ## Python
 
 Python-зависимости ставятся в `.venv/`. Это держит систему локальной внутри папки Mnemazine.
+
+`install.sh` использует `requirements.lock`, если он есть, и откатывается на
+`requirements.txt` только когда lock отсутствует. Политика обновления: меняешь
+`requirements.txt`, пересобираешь локальный `.venv`, freeze'ишь
+`requirements.lock`, коммитишь оба файла. Если Python-движки обязательны,
+запускай с `MNEMAZINE_REQUIRE_PYTHON_DEPS=1`.
+
+Отсутствующие опциональные движки видны явно: установщик пишет `DEGRADED: ...`
+для Python deps, Apple Vision OCR или пропущенных локальных движков.
+
+## Desktop dry-run
+
+```bash
+npm run protocol:desktop:dry-run
+```
+
+Команда гоняет Desktop-протокол на временных inbox/vault/cache/archive. Live
+Desktop inbox не архивируется, не удаляется и не переписывается.
 
 ## Agent Skills
 

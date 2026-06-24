@@ -5,10 +5,11 @@
 #
 # Dry run (walk stages + questions, install/deploy nothing):
 #   MNEMAZINE_SETUP_DRYRUN=1 bash setup.sh
-set -uo pipefail
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${MNEMAZINE_SETUP_DRYRUN:-0}"
+KNOWN_HOSTS="$ROOT/.mnemazine/known_hosts"
 
 # ---- ui helpers -------------------------------------------------------------
 b() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -48,6 +49,10 @@ ask_text() { # ask_text "prompt" [silent] -> REPLY_TXT
 run() { # run a command unless dry-run
   if [ "$DRY" = "1" ]; then printf '  [dry] %s\n' "$*"; return 0; fi
   "$@"
+}
+
+sq() {
+  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
 }
 
 b "Mnemazine — установка по шагам."
@@ -118,12 +123,18 @@ if [ "$REPLY_IDX" = "1" ]; then
     if [ "$REPLY_IDX" = "1" ]; then
       ask_text "VPS (user@host)"; BOT_VPS="$REPLY_TXT"
       ask_text "Путь к SSH-ключу (Enter = ~/.ssh/id_rsa)"; BOT_KEY="${REPLY_TXT:-$HOME/.ssh/id_rsa}"
-      if [ "$DRY" != "1" ] && ! ssh -i "$BOT_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$BOT_VPS" 'command -v node >/dev/null && command -v pm2 >/dev/null' 2>/dev/null; then
-        miss "бота через VPS" "VPS недоступен или нет node+pm2 (ssh-in: 'npm i -g pm2'). Запусти бота локально вручную позже."
-        BOT_MODE="manual"
-      else
-        BOT_MODE="vps"; ok "VPS на связи (node+pm2 есть)."
+      ask_text "SSH fingerprint хоста (SHA256:..., из панели VPS или ssh-keygen -lf)"; BOT_FP="$REPLY_TXT"
+      [ -z "$BOT_FP" ] && { no "fingerprint пустой — небезопасно."; halt; }
+      if [ "$DRY" != "1" ]; then
+        mkdir -p "$ROOT/.mnemazine"
+        touch "$KNOWN_HOSTS"
+        MNEMAZINE_VPS="$BOT_VPS" MNEMAZINE_VPS_KEY="$BOT_KEY" MNEMAZINE_VPS_HOST_FINGERPRINT="$BOT_FP" bash "$ROOT/scripts/mnemazine-pin-vps-host.sh"
       fi
+      if [ "$DRY" != "1" ] && ! ssh -i "$BOT_KEY" -o UserKnownHostsFile="$KNOWN_HOSTS" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$BOT_VPS" 'command -v node >/dev/null && command -v pm2 >/dev/null' 2>/dev/null; then
+        no "VPS недоступен или нет node+pm2."
+        halt
+      fi
+      BOT_MODE="vps"; ok "VPS на связи (node+pm2 есть)."
     else
       miss "бота через VPS" "Без VPS постоянного приёма нет. Можешь запускать бота локально, пока устройство включено."
       BOT_MODE="manual"
@@ -144,7 +155,9 @@ fi
 # deploy bot if VPS path chosen
 if [ "$BOT_MODE" = "vps" ]; then
   stage 6.1 "Деплой бота на VPS"
-  REMOTE_INBOX="/var/www/mnemazine-inbox"
+  REMOTE_ROOT="mnemazine"
+  REMOTE_INBOX="$REMOTE_ROOT/inbox"
+  REMOTE_BOT="$REMOTE_ROOT/bot"
   # Persist the host/key boundary so poll/sync scripts read it (never hardcoded).
   if [ "$DRY" != "1" ]; then
     mkdir -p "$ROOT/.mnemazine"
@@ -153,17 +166,23 @@ if [ "$BOT_MODE" = "vps" ]; then
 MNEMAZINE_VPS="$BOT_VPS"
 MNEMAZINE_VPS_KEY="$BOT_KEY"
 MNEMAZINE_REMOTE_INBOX="$REMOTE_INBOX"
+MNEMAZINE_REMOTE_MUTATION=1
 CFG
     umask 022
     ok "Записал .mnemazine/config.env (chmod 600, gitignored)."
   fi
   if [ "$DRY" = "1" ]; then
-    note "[dry] scp bot → $BOT_VPS:/var/www/mnemazine-bot/ ; pm2 start с токеном"
+    note "[dry] scp bot → $BOT_VPS:$REMOTE_BOT/ ; pm2 start с токеном"
   else
-    ssh -i "$BOT_KEY" -o StrictHostKeyChecking=no "$BOT_VPS" "mkdir -p /var/www/mnemazine-bot $REMOTE_INBOX"
-    cat "$ROOT/scripts/mnemazine-telegram-bot.mjs" | ssh -i "$BOT_KEY" -o StrictHostKeyChecking=no "$BOT_VPS" 'cat > /var/www/mnemazine-bot/mnemazine-telegram-bot.mjs'
+    SSH_OPTS=(-i "$BOT_KEY" -o "UserKnownHostsFile=$KNOWN_HOSTS" -o StrictHostKeyChecking=yes)
+    ssh "${SSH_OPTS[@]}" "$BOT_VPS" "mkdir -p $REMOTE_BOT $REMOTE_INBOX" || { no "Не смог создать папки на VPS."; halt; }
+    ssh "${SSH_OPTS[@]}" "$BOT_VPS" "cat > $REMOTE_BOT/mnemazine-telegram-bot.mjs" < "$ROOT/scripts/mnemazine-telegram-bot.mjs" || { no "Не смог загрузить bot script на VPS."; halt; }
+    {
+      printf 'TELEGRAM_BOT_TOKEN=%s\n' "$(sq "$BOT_TOKEN")"
+      printf 'MNEMAZINE_INBOX=%s\n' "$(sq "$REMOTE_INBOX")"
+    } | ssh "${SSH_OPTS[@]}" "$BOT_VPS" "umask 177; cat > $REMOTE_BOT/.env" || { no "Не смог записать .env на VPS."; halt; }
     # Idempotent: start, or restart if the process already exists (rerun-safe).
-    ssh -i "$BOT_KEY" -o StrictHostKeyChecking=no "$BOT_VPS" "cd /var/www/mnemazine-bot && TELEGRAM_BOT_TOKEN='$BOT_TOKEN' MNEMAZINE_INBOX=$REMOTE_INBOX pm2 start mnemazine-telegram-bot.mjs --name mnemazine-bot --update-env 2>/dev/null || TELEGRAM_BOT_TOKEN='$BOT_TOKEN' MNEMAZINE_INBOX=$REMOTE_INBOX pm2 restart mnemazine-bot --update-env; pm2 save"
+    ssh "${SSH_OPTS[@]}" "$BOT_VPS" "cd $REMOTE_BOT && set -a && . ./.env && set +a && pm2 start mnemazine-telegram-bot.mjs --name mnemazine-bot --update-env 2>/dev/null || pm2 restart mnemazine-bot --update-env; pm2 save" || { no "Не смог запустить pm2 на VPS."; halt; }
     ok "Бот запущен на VPS (bootstrap-режим)."
     note "Напиши боту сообщение, затем на VPS: pm2 logs mnemazine-bot — увидишь свой chat_id."
     note "Закрой доступ: перезапусти с ALLOWED_CHAT_IDS=<chat_id> (см. docs/telegram-intake.md)."

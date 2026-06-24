@@ -101,7 +101,18 @@ function extractJson(text) {
   return JSON.parse(body.slice(start, end + 1))
 }
 
-// --- Codex backend (unchanged headless pattern: --output-schema + -o) ---
+function codexNeedsSearch(opts = {}) {
+  return (opts.tools || []).some(tool => /^(WebSearch|WebFetch|mcp__firecrawl|mcp__tavily)$/i.test(tool))
+}
+
+function codexExecArgs(cwd, opts = {}) {
+  const args = ['--ask-for-approval', 'never']
+  if (codexNeedsSearch(opts)) args.push('--search')
+  args.push('exec', '-C', cwd, '--skip-git-repo-check', '--sandbox', 'read-only', '--ephemeral')
+  return args
+}
+
+// --- Codex backend (headless pattern: --output-schema + -o) ---
 async function codexJsonCall(prompt, schema, opts) {
   if (!binExists(CODEX_BIN)) throw new Error(`codex binary not found: ${CODEX_BIN}`)
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-codex-'))
@@ -113,8 +124,7 @@ async function codexJsonCall(prompt, schema, opts) {
   await fs.writeFile(promptFile, prompt, { encoding: 'utf8', mode: 0o600 })
   try {
     const res = await runProc(CODEX_BIN, [
-      'exec', '-C', cwd, '--skip-git-repo-check',
-      '--dangerously-bypass-approvals-and-sandbox',
+      ...codexExecArgs(cwd, opts),
       '--output-schema', schemaFile, '-o', outFile, '-'
     ], { input: await fs.readFile(promptFile, 'utf8'), timeoutMs: opts.timeoutMs || TIMEOUT_MS })
     if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
@@ -130,7 +140,7 @@ async function codexJsonCall(prompt, schema, opts) {
 // No --output-schema in Claude, so the schema is embedded and the result parsed.
 // Tools are opt-in via opts.tools (default none = no network); enrich/verify
 // pass WebSearch/WebFetch (+ MCP) to let Claude research with available tools.
-// Never uses --dangerously-skip-permissions (constitution): unpermitted tools
+// Never uses the permission-bypass flag (constitution): unpermitted tools
 // simply do not run in -p mode.
 async function claudeJsonCall(prompt, schema, opts) {
   const bin = resolveClaudeBin()
@@ -164,8 +174,7 @@ export async function llmText(prompt, opts = {}) {
   if (provider === 'codex') {
     if (!binExists(CODEX_BIN)) throw new Error(`codex binary not found: ${CODEX_BIN}`)
     const res = await runProc(CODEX_BIN, [
-      'exec', '-C', opts.cwd || process.cwd(), '--skip-git-repo-check',
-      '--dangerously-bypass-approvals-and-sandbox', '-'
+      ...codexExecArgs(opts.cwd || process.cwd(), opts), '-'
     ], { input: prompt, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
     if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
     return String(res.stdout || '').trim()

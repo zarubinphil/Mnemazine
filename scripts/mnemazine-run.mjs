@@ -26,6 +26,7 @@ const FINISH = process.env.MNEMAZINE_FINISH !== '0'
 const DEEP = process.argv.includes('--deep') || process.env.MNEMAZINE_DEEP === '1'
 const REQUIRE_DEEP = process.argv.includes('--require-deep') || process.env.MNEMAZINE_REQUIRE_DEEP === '1'
 const ENRICH_REQUIRED = DEEP && process.env.MNEMAZINE_ENRICH !== '0' && !process.argv.includes('--no-enrich')
+const STRICT_ARCHIVE_KNOWLEDGE = (REQUIRE_DEEP || (DEEP && ENRICH_REQUIRED)) && process.env.MNEMAZINE_STRICT_ARCHIVE !== '0' && !process.argv.includes('--allow-raw-archive')
 const WHISPER_MODEL = process.env.MNEMAZINE_WHISPER_MODEL || ''
 const WHISPER_LANGUAGE = process.env.MNEMAZINE_WHISPER_LANGUAGE || 'ru'
 const VIDEO_FRAME_LIMIT = Number(process.env.MNEMAZINE_VIDEO_FRAME_LIMIT || '8')
@@ -295,6 +296,66 @@ async function archiveFile(file, hash) {
   return target
 }
 
+let vaultMarkdownFiles = null
+async function listVaultMarkdownFiles() {
+  if (vaultMarkdownFiles) return vaultMarkdownFiles
+  const out = []
+  async function walk(dir) {
+    for (const item of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      const p = path.join(dir, item.name)
+      if (item.isDirectory()) {
+        if (['.git', '.obsidian'].includes(item.name) || item.name.startsWith('graphify-out')) continue
+        await walk(p)
+      } else if (item.isFile() && p.endsWith('.md')) out.push(p)
+    }
+  }
+  await walk(VAULT)
+  vaultMarkdownFiles = out
+  return out
+}
+
+function noteSectionAfter(text, label) {
+  const start = String(text || '').indexOf(label)
+  if (start === -1) return ''
+  const tail = text.slice(start + label.length)
+  const next = tail.search(/\n##\s+/)
+  return next === -1 ? tail : tail.slice(0, next)
+}
+
+function strictKnowledgeReady(text) {
+  const facts = noteSectionAfter(text, 'External facts added before atomization:')
+  const sources = noteSectionAfter(text, 'Public/source expansion:')
+  const factCount = facts
+    .split('\n')
+    .filter(line => /^\s*-\s+\S/.test(line) && !/No external enrichment facts recorded/i.test(line))
+    .length
+  return /^status:\s*"final"\s*$/m.test(text) &&
+    /^verified:\s*true\s*$/m.test(text) &&
+    /^verification_status:\s*"verified"\s*$/m.test(text) &&
+    /^enrichment:\s*"external-research"\s*$/m.test(text) &&
+    factCount >= 2 &&
+    /https?:\/\//i.test(sources)
+}
+
+async function hasFinalKnowledgeForHash(hash) {
+  const ref = sourceRef(hash)
+  for (const file of await listVaultMarkdownFiles()) {
+    const text = await fs.readFile(file, 'utf8').catch(() => '')
+    if ((text.includes(ref) || text.includes(hash)) && (!STRICT_ARCHIVE_KNOWLEDGE || strictKnowledgeReady(text))) return true
+  }
+  return false
+}
+
+async function cachedExtractionText(entry) {
+  let textPath = entry?.text_path || ''
+  if (!textPath && entry?.cache) {
+    const record = await readJson(path.join(ROOT, entry.cache), {})
+    textPath = record.text_path || ''
+  }
+  if (!textPath) return ''
+  return await fs.readFile(path.join(EXTRACTS, textPath), 'utf8').catch(() => '')
+}
+
 function runLocalNodeScript(script, args = []) {
   const file = path.join(ROOT, 'scripts', script)
   if (!existsSync(file)) return { skipped: true, reason: `${script} missing` }
@@ -357,12 +418,14 @@ async function writeActionBrief(finishResult) {
   const dir = STATE
   await ensureDir(dir)
   const notes = await recentNotes()
+  const inboxEntries = await fs.readdir(INBOX, { withFileTypes: true }).catch(() => [])
+  const activeInboxCount = inboxEntries.filter(entry => entry.isFile() && !entry.name.startsWith('.')).length
   const lines = [
     `# Mnemazine Action Brief — ${new Date().toISOString().slice(0, 10)}`,
     '',
     '## Status',
     '',
-    `- Inbox: ${(await fs.readdir(INBOX).catch(() => [])).filter(name => !name.startsWith('.')).length}`,
+    `- Inbox: ${activeInboxCount}`,
     `- Vault: ${VAULT}`,
     `- Quality gate: ${finishResult.quality?.ok ? 'ok' : 'check output'}`,
     `- Graph refresh: ${finishResult.graph?.ok ? 'ok' : finishResult.graph?.code === 2 ? 'partial / semantic pending' : finishResult.graph?.skipped ? 'skipped' : 'failed'}`,
@@ -380,9 +443,9 @@ async function writeActionBrief(finishResult) {
   return out
 }
 
-async function finishRun() {
+async function finishRun(runStartedAt) {
   const result = {}
-  result.quality = runLocalNodeScript('mnemazine-vault-quality-gate.mjs')
+  result.quality = runLocalNodeScript('mnemazine-vault-quality-gate.mjs', ['--changed-since', runStartedAt, '--max-failures', '50'])
   result.graph = runLocalNodeScript('mnemazine-refresh-graphify.mjs', ['--vault', VAULT, '--mode', 'auto', '--json'])
   result.weekly = runLocalNodeScript('mnemazine-weekly-brief-html.mjs')
   const weeklyReport = result.weekly?.stdout?.match(/\/[^\s]+\.html/)?.[0]
@@ -395,6 +458,7 @@ async function finishRun() {
 }
 
 async function main() {
+  const runStartedAt = new Date().toISOString()
   await ensureDir(INBOX)
   await ensureDir(VAULT)
   await ensureDir(REPORTS)
@@ -406,6 +470,7 @@ async function main() {
   let processed = 0
   let cachedOnly = 0
   const toArchive = []
+  const synthSourceRefs = new Set()
   let failed = 0
   const canLlmExtract = DEEP && llmAvailable()
   for (const [index, entry] of entries.entries()) {
@@ -415,9 +480,19 @@ async function main() {
     try {
       const hash = await sha256(file)
       if (cache[hash]) {
-        toArchive.push({ file, hash })
-        cachedOnly += 1
-        continue
+        if (await hasFinalKnowledgeForHash(hash)) {
+          toArchive.push({ file, hash })
+          cachedOnly += 1
+          continue
+        }
+        const cachedText = await cachedExtractionText(cache[hash])
+        if (cache[hash].status === 'extracted_for_note' && hasUsableExtraction(cachedText)) {
+          synthSourceRefs.add(cache[hash].source_ref || sourceRef(hash))
+          toArchive.push({ file, hash })
+          processed += 1
+          continue
+        }
+        delete cache[hash]
       }
       // Local-first recognition (0 tokens): Apple Vision OCR / markitdown / whisper.
       let text = await extract(file)
@@ -433,11 +508,11 @@ async function main() {
       if (!hasUsableExtraction(text)) {
         const record = await writeExtractCache(file, hash, text, 'needs_manual_context')
         cache[hash] = { status: record.status, source_ref: record.source_ref, cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
-        toArchive.push({ file, hash })
-        cachedOnly += 1
+        failed += 1
       } else {
-        await writeExtractCache(file, hash, text, 'extracted_for_note')
+        const record = await writeExtractCache(file, hash, text, 'extracted_for_note')
         cache[hash] = { status: 'extracted_for_note', source_ref: sourceRef(hash), cache: path.relative(ROOT, path.join(EXTRACTS, `${hash}.json`)) }
+        synthSourceRefs.add(record.source_ref)
         toArchive.push({ file, hash })
         processed += 1
       }
@@ -457,37 +532,51 @@ async function main() {
     // research/verification/atomization (deep) and writes vault atoms.
     const synthArgs = [path.join(ROOT, 'scripts/mnemazine-synthesize.mjs')]
     if (DEEP) synthArgs.push('--deep')
-    const synth = spawnSync(process.execPath, synthArgs, { encoding: 'utf8', env: process.env })
+    const synthEnv = { ...process.env }
+    if (synthSourceRefs.size) synthEnv.MNEMAZINE_SYNTH_SOURCE_REFS = [...synthSourceRefs].join(',')
+    const synth = spawnSync(process.execPath, synthArgs, { encoding: 'utf8', env: synthEnv })
     if (synth.stdout) process.stdout.write(synth.stdout)
     if (synth.stderr) process.stderr.write(synth.stderr)
     synthesize = parseJsonOutput(synth.stdout) || { ok: synth.status === 0, parse_error: true }
     if (synth.status !== 0) {
-      await writeRunState({ ok: false, failure: 'synthesize failed', inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, synthesize, vault: VAULT, finished_at: new Date().toISOString() })
+      await writeRunState({ ok: false, failure: 'synthesize failed', inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() })
       process.exit(synth.status || 1)
     }
+    vaultMarkdownFiles = null
   }
   if (REQUIRE_DEEP) {
     const deepFailures = validateDeepRun({ synthesize, processed })
     if (deepFailures.length) {
-      await writeRunState({ ok: false, failures: deepFailures, inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, synthesize, vault: VAULT, finished_at: new Date().toISOString() })
+      await writeRunState({ ok: false, failures: deepFailures, inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() })
       console.error(JSON.stringify({ ok: false, failures: deepFailures, synthesize }, null, 2))
       process.exit(1)
     }
   }
-  const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs')], { stdio: 'inherit', env: process.env })
+  const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs'), '--changed-since', runStartedAt, '--max-failures', '50'], { stdio: 'inherit', env: process.env })
   if (quality.status !== 0) {
-    await writeRunState({ ok: false, failure: 'vault quality failed', inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, synthesize, vault: VAULT, finished_at: new Date().toISOString() })
+    await writeRunState({ ok: false, failure: 'run vault quality failed', inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() })
     process.exit(quality.status || 1)
+  }
+  const missingFinalNotes = []
+  vaultMarkdownFiles = null
+  for (const item of toArchive) {
+    if (!await hasFinalKnowledgeForHash(item.hash)) missingFinalNotes.push(path.basename(item.file))
+  }
+  if (missingFinalNotes.length) {
+    const failure = STRICT_ARCHIVE_KNOWLEDGE ? 'final enriched verified note missing for archive candidates' : 'final note missing for archive candidates'
+    await writeRunState({ ok: false, failure, missing_final_notes: missingFinalNotes, inbox: entries.length, processed, cached_only: cachedOnly, failed, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() })
+    console.error(JSON.stringify({ ok: false, failure, missing_final_notes: missingFinalNotes }, null, 2))
+    process.exit(1)
   }
   const archived = []
   for (const item of toArchive) archived.push(await archiveFile(item.file, item.hash))
   // Deep + final stage: Russian humanizer digest, AFTER the graph so connections
   // are real. Writes a Справка into each note + one session summary note.
   if (DEEP) {
-    spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs')], { stdio: 'inherit', env: process.env })
+    spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs'), '--changed-since', runStartedAt], { stdio: 'inherit', env: process.env })
   }
-  const finish = FINISH ? await finishRun() : { skipped: true }
-  const result = { ok: true, inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, synthesize, finish, vault: VAULT, finished_at: new Date().toISOString() }
+  const finish = FINISH ? await finishRun(runStartedAt) : { skipped: true }
+  const result = { ok: true, inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, finish, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() }
   await writeRunState(result)
   console.log(JSON.stringify(result, null, 2))
 }

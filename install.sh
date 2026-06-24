@@ -14,14 +14,29 @@ USER_BIN="$HOME/.local/bin"
 mkdir -p "$INBOX" "$VAULT" "$REPORTS" "$STATE" "$BIN" "$USER_BIN" "$ROOT/.mnemazine/cache"
 mkdir -p "$VAULT/00 System" "$VAULT/01 Concepts" "$VAULT/02 Tools" "$VAULT/03 Agents" "$VAULT/04 Projects" "$VAULT/99 Archive"
 
-if [ "${MNEMAZINE_SKIP_DEPS:-0}" != "1" ] && command -v python3 >/dev/null 2>&1; then
-  python3 -m venv "$ROOT/.venv" || true
-  "$ROOT/.venv/bin/python" -m pip install --upgrade pip
-  "$ROOT/.venv/bin/python" -m pip install -r "$ROOT/requirements.txt" || true
+if [ "${MNEMAZINE_SKIP_DEPS:-0}" = "1" ]; then
+  echo "DEGRADED: Python deps skipped by MNEMAZINE_SKIP_DEPS=1."
+elif command -v python3 >/dev/null 2>&1; then
+  req="$ROOT/requirements.lock"
+  [ -f "$req" ] || req="$ROOT/requirements.txt"
+  if python3 -m venv "$ROOT/.venv"; then
+    if ! "$ROOT/.venv/bin/python" -m pip install --upgrade pip || ! "$ROOT/.venv/bin/python" -m pip install -r "$req"; then
+      echo "DEGRADED: Python deps failed from $req; local document engines unavailable." >&2
+      [ "${MNEMAZINE_REQUIRE_PYTHON_DEPS:-0}" = "1" ] && exit 1
+    fi
+  else
+    echo "DEGRADED: could not create .venv; local document engines unavailable." >&2
+    [ "${MNEMAZINE_REQUIRE_PYTHON_DEPS:-0}" = "1" ] && exit 1
+  fi
+else
+  echo "DEGRADED: python3 missing; local document engines unavailable." >&2
+  [ "${MNEMAZINE_REQUIRE_PYTHON_DEPS:-0}" = "1" ] && exit 1
 fi
 
 if command -v swiftc >/dev/null 2>&1 && [ -f "$ROOT/skills/mnemazine/vision-ocr.swift" ]; then
-  swiftc -O "$ROOT/skills/mnemazine/vision-ocr.swift" -o "$BIN/vision-ocr" || true
+  swiftc -O "$ROOT/skills/mnemazine/vision-ocr.swift" -o "$BIN/vision-ocr" || echo "DEGRADED: Apple Vision OCR build failed; image OCR unavailable." >&2
+else
+  echo "DEGRADED: swiftc or Vision source missing; Apple Vision OCR unavailable." >&2
 fi
 
 if [ -d "$HOME/.codex/skills" ]; then

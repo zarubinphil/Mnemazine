@@ -23,8 +23,19 @@ const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join
 const SESSION = arg('session', new Date().toISOString().slice(0, 10))
 const PROVIDER = arg('provider', process.env.MNEMAZINE_LLM || 'claude')
 const FORCE = argv.includes('--force')
+const DETERMINISTIC = argv.includes('--deterministic') || process.env.MNEMAZINE_DIGEST_DETERMINISTIC === '1'
 const LIMIT = Number(arg('limit', '0')) // 0 = no cap
+const CHANGED_SINCE = arg('changed-since', '')
 const SPRAVKA = '## Справка'
+
+function sinceMs(value) {
+  if (!value) return 0
+  if (/^\d+(?:\.\d+)?$/.test(value)) return Number(value)
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const CHANGED_SINCE_MS = sinceMs(CHANGED_SINCE)
 // Personal project context stays out of the public repo. Set it once locally:
 // env MNEMAZINE_OWNER_CONTEXT, or a gitignored file .mnemazine/owner-context.txt.
 function ownerContext() {
@@ -110,6 +121,37 @@ function titleOf(text, file) {
   return text.match(/^title:\s*"([^"]+)"/m)?.[1] || text.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(file, '.md')
 }
 
+function clean(text, max = 420) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/^[-*]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max)
+}
+
+function extractSection(text, names) {
+  for (const name of names) {
+    const re = new RegExp(`^##\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, 'mi')
+    const hit = text.match(re)
+    if (hit) return clean(hit[1])
+  }
+  return ''
+}
+
+function deterministicDigest(noteText, file) {
+  const title = titleOf(noteText, file)
+  const what = extractSection(noteText, ['What This Is', 'Что это', 'Суть'])
+  const why = extractSection(noteText, ['Why It Matters', 'Почему важно'])
+  const how = extractSection(noteText, ['How To Use It', 'Как использовать', 'Reuse'])
+  return {
+    zagolovok: title,
+    chto_eto: what || `Проверенная заметка по теме "${title}".`,
+    o_chyom: how || what || 'Суть взята из финальной atom note и привязана к источникам.',
+    pochemu_vazhno: why || `Полезно для ${OWNER_CONTEXT}: можно быстро понять, стоит ли применять это знание.`
+  }
+}
+
 function spravkaBlock(d, connections) {
   const conns = connections.length ? connections.map(c => `- [[${c.replace(/\.md$/, '')}]]`).join('\n') : '- (отдельных связей не найдено)'
   return `${SPRAVKA}
@@ -126,26 +168,26 @@ ${conns}
 }
 
 async function main() {
-  if (!llmAvailable(PROVIDER)) {
-    console.log(JSON.stringify({ ok: false, reason: `llm provider '${PROVIDER}' unavailable`, written: 0 }))
-    process.exit(0)
-  }
+  const modelAvailable = !DETERMINISTIC && llmAvailable(PROVIDER)
   const connByNote = await loadConnections()
   const files = await walk(VAULT)
   const summary = []
   let written = 0
   for (const file of files) {
     if (LIMIT && written >= LIMIT) break
+    if (CHANGED_SINCE_MS && (await fs.stat(file)).mtimeMs < CHANGED_SINCE_MS) continue
     const text = await fs.readFile(file, 'utf8')
     if (text.includes(SPRAVKA) && !FORCE) continue
     const rel = path.relative(VAULT, file)
     const connections = connByNote.get(rel) || []
     let d
     try {
-      d = await llmJson(digestPrompt(text, connections), DIGEST_SCHEMA, { provider: PROVIDER })
+      d = modelAvailable
+        ? await llmJson(digestPrompt(text, connections), DIGEST_SCHEMA, { provider: PROVIDER })
+        : deterministicDigest(text, file)
     } catch (err) {
       console.error(`[digest] failed for ${rel}: ${err.message}`)
-      continue
+      d = deterministicDigest(text, file)
     }
     if (!d?.zagolovok) continue
     // Справка is always appended last, so strip from its first occurrence to EOF.
@@ -177,7 +219,7 @@ async function main() {
     await fs.writeFile(path.join(dir, `Сводка-${SESSION}.md`), body, 'utf8')
   }
 
-  console.log(JSON.stringify({ ok: true, provider: PROVIDER, written, summary: summary.length, linked: connByNote.size }, null, 2))
+  console.log(JSON.stringify({ ok: true, provider: PROVIDER, model_available: modelAvailable, written, summary: summary.length, linked: connByNote.size }, null, 2))
 }
 
 main().catch(err => { console.error(err.message || err); process.exit(1) })

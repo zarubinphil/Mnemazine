@@ -6,6 +6,8 @@ ENV_INBOX="${MNEMAZINE_INBOX:-}"
 ENV_VAULT="${MNEMAZINE_VAULT:-}"
 ENV_DEEP="${MNEMAZINE_DEEP:-}"
 ENV_REQUIRE_DEEP="${MNEMAZINE_REQUIRE_DEEP:-}"
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
 [ -f "$REPO/.mnemazine/config.env" ] && . "$REPO/.mnemazine/config.env"
 [ -f "$REPO/.mnemazine/config.local.sh" ] && . "$REPO/.mnemazine/config.local.sh"
@@ -31,6 +33,28 @@ run_inbox() {
 }
 
 mkdir -p "$BASE_INBOX" "$MNEMAZINE_VAULT"
+
+if [ "$DRY_RUN" = "1" ]; then
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/mnemazine-desktop-dry-run.XXXXXX")"
+  trap 'rm -rf "$tmp"' EXIT
+  mkdir -p "$tmp/inbox" "$tmp/vault" "$tmp/reports" "$tmp/state" "$tmp/cache/extracted" "$tmp/archive"
+  cp "$REPO/demo/inbox/example-guide.md" "$tmp/inbox/example-guide.md"
+  echo "Mnemazine protocol dry-run: live inbox untouched ($BASE_INBOX)" >&2
+  MNEMAZINE_INBOX="$tmp/inbox" \
+  MNEMAZINE_VAULT="$tmp/vault" \
+  MNEMAZINE_REPORTS="$tmp/reports" \
+  MNEMAZINE_STATE="$tmp/state" \
+  MNEMAZINE_CACHE="$tmp/cache/processed-hashes.json" \
+  MNEMAZINE_EXTRACTS="$tmp/cache/extracted" \
+  MNEMAZINE_ARCHIVE="$tmp/archive" \
+  MNEMAZINE_DEEP=0 \
+  MNEMAZINE_REQUIRE_DEEP=0 \
+  MNEMAZINE_FINISH=0 \
+    npm run --silent run
+  echo "Mnemazine protocol dry-run: ok" >&2
+  exit 0
+fi
+
 ran=0
 
 run_inbox "$BASE_INBOX"

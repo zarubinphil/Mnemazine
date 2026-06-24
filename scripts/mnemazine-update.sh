@@ -12,6 +12,8 @@ node --check scripts/mnemazine-run.mjs
 node --check scripts/mnemazine-complete-check.mjs
 node --check scripts/mnemazine-synthesize.mjs
 node --check scripts/mnemazine-verify.mjs
+npm run selftest:security
+npm run audit:security
 
 echo "Mnemazine updated."
 echo "Run from chat: Mnemazine"

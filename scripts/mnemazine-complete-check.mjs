@@ -33,14 +33,17 @@ function run(command, args) {
   })
 }
 
-async function newestFileMtime(dir, filter = () => true) {
+async function newestChangedFileMtime(dir, sinceMs, filter = () => true) {
   let newest = 0
   async function walk(folder) {
     for (const item of await fs.readdir(folder, { withFileTypes: true }).catch(() => [])) {
       if (item.name.startsWith('graphify-out')) continue
       const file = path.join(folder, item.name)
       if (item.isDirectory()) await walk(file)
-      else if (item.isFile() && filter(file)) newest = Math.max(newest, (await fs.stat(file)).mtimeMs)
+      else if (item.isFile() && filter(file)) {
+        const stat = await fs.stat(file)
+        if (!sinceMs || stat.mtimeMs >= sinceMs) newest = Math.max(newest, stat.mtimeMs)
+      }
     }
   }
   await walk(dir)
@@ -72,6 +75,7 @@ function deepFailures(lastRun) {
   if (!lastRun) return ['last run state missing']
   if (!lastRun.ok) failures.push(`last run failed: ${(lastRun.failures || [lastRun.failure || 'unknown']).join('; ')}`)
   if (!lastRun.deep) failures.push('last run was not deep')
+  if (lastRun.strict_archive_knowledge !== true) failures.push('strict archive knowledge gate was not enabled')
   if (!lastRun.synthesize || lastRun.synthesize.skipped) {
     if (Number(lastRun.processed || 0) > 0) failures.push('deep synthesis did not run')
     return failures
@@ -88,7 +92,12 @@ async function main() {
   const inboxFiles = await activeInboxFiles()
   if (inboxFiles.length) failures.push(`inbox not empty: ${inboxFiles.length}`)
 
-  const quality = await run(process.execPath, ['scripts/mnemazine-vault-quality-gate.mjs'])
+  const lastRunFile = path.join(STATE, 'last-run.json')
+  const lastRun = await readJson(lastRunFile)
+  const lastRunStartedMs = lastRun?.started_at ? Date.parse(lastRun.started_at) : 0
+  const qualityArgs = ['scripts/mnemazine-vault-quality-gate.mjs', '--max-failures', '50']
+  if (lastRunStartedMs) qualityArgs.push('--changed-since', lastRun.started_at)
+  const quality = await run(process.execPath, qualityArgs)
   if (!quality.ok) failures.push(`vault quality failed: ${quality.stderr || quality.stdout}`)
 
   const report = await latestReport()
@@ -98,7 +107,7 @@ async function main() {
     if (!reportQuality.ok) failures.push(`report quality failed: ${reportQuality.stderr || reportQuality.stdout}`)
   }
 
-  const newestNote = await newestFileMtime(VAULT, file => file.endsWith('.md'))
+  const newestNote = await newestChangedFileMtime(VAULT, lastRunStartedMs, file => file.endsWith('.md'))
   const reportMtime = report ? (await fs.stat(report)).mtimeMs : 0
   if (newestNote && reportMtime && reportMtime < newestNote) failures.push('weekly report older than newest vault note')
 
@@ -114,8 +123,6 @@ async function main() {
     else warnings.push(msg)
   }
 
-  const lastRunFile = path.join(STATE, 'last-run.json')
-  const lastRun = await readJson(lastRunFile)
   if (REQUIRE_DEEP) {
     for (const failure of deepFailures(lastRun)) failures.push(failure)
   }

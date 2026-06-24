@@ -15,9 +15,13 @@ __pycache__/
 .mnemazine/config.json
 .mnemazine/config.env
 .mnemazine/config.local.sh
+.mnemazine/known_hosts
 .mnemazine/.last-daily
+.mnemazine/.last-daily-attempt
+.mnemazine/.last-daily-completed
 .mnemazine/rebuild/
 .mnemazine/reprocess-video-inbox/
+.mnemazine/repair-backup/
 inbox/*
 !inbox/.gitkeep
 vault/*

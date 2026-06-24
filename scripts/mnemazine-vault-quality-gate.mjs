@@ -14,6 +14,17 @@ function arg(name, fallback = '') {
 
 const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
 const REQUIRE_DOSSIER = argv.includes('--require-dossier')
+const CHANGED_SINCE = arg('changed-since', '')
+const MAX_FAILURES = Number(arg('max-failures', process.env.MNEMAZINE_QUALITY_MAX_FAILURES || '0'))
+
+function sinceMs(value) {
+  if (!value) return 0
+  if (/^\d+(?:\.\d+)?$/.test(value)) return Number(value)
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const CHANGED_SINCE_MS = sinceMs(CHANGED_SINCE)
 
 const badMarkers = [
   /raw\s+ocr/i,
@@ -52,7 +63,10 @@ async function walk(dir) {
 
 const files = await walk(VAULT)
 const failures = []
+let checked = 0
 for (const file of files) {
+  const stat = await fs.stat(file)
+  if (CHANGED_SINCE_MS && stat.mtimeMs < CHANGED_SINCE_MS) continue
   const rel = path.relative(VAULT, file)
   if (
     rel.includes('/graphify-out/') ||
@@ -63,6 +77,7 @@ for (const file of files) {
     /(^|\/)_(Содержание|МАСТЕР-ИНДЕКС|ROUTING|ШАБЛОНЫ)\.md$/.test(rel) ||
     ['AGENTS.md', 'CLAUDE.md', '_ROUTING.md', 'Лог обработки.md'].includes(rel)
   ) continue
+  checked += 1
   const text = await fs.readFile(file, 'utf8')
   if (/^##\s+Атомизировано(?:\s|$)/m.test(text)) continue
   const hit = badMarkers.find(re => re.test(text))
@@ -80,12 +95,13 @@ for (const file of files) {
     : []
   if (hit || !hasSource || !hasMeaning || missingDossier.length) {
     failures.push({ file: rel, marker: hit ? String(hit) : missingDossier.length ? `missing dossier sections: ${missingDossier.join(', ')}` : 'missing required sections' })
+    if (MAX_FAILURES > 0 && failures.length >= MAX_FAILURES) break
   }
 }
 
 if (failures.length) {
-  console.error(JSON.stringify({ ok: false, failures }, null, 2))
+  console.error(JSON.stringify({ ok: false, checked, total: files.length, scope: CHANGED_SINCE_MS ? { changed_since: new Date(CHANGED_SINCE_MS).toISOString() } : { changed_since: null }, failures }, null, 2))
   process.exit(1)
 }
 
-console.log(JSON.stringify({ ok: true, checked: files.length }, null, 2))
+console.log(JSON.stringify({ ok: true, checked, total: files.length, scope: CHANGED_SINCE_MS ? { changed_since: new Date(CHANGED_SINCE_MS).toISOString() } : { changed_since: null } }, null, 2))

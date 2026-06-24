@@ -23,11 +23,13 @@ only a transit buffer, never a second store.
                           │   • .run-now flag present?  → run
                           │   • daily window reached?   → run
                           ▼
-                  rsync --remove-source-files  (move; host stays thin)
+                  rsync copy to local staging
                           ▼
                     local inbox/  ──▶  npm start  (the strict protocol)
                           ▼
-                        vault/        ──writes .last-run──▶ Mini App status
+                        vault/        ──success only: delete pulled host files
+                          │
+                          └───────────writes .last-run──▶ Mini App status
 ```
 
 Reverse channel without a public machine: the host never reaches your machine.
@@ -42,7 +44,7 @@ that flag; the next poll consumes it.
 | `scripts/mnemazine-webapp-server.mjs` | host | Mini App API (`/api/status`, `/api/send`, `/api/run`). Verifies Telegram `initData`, enforces an allowlist. Zero deps. |
 | `webapp/index.html` | host (static) | The Mini App UI. Theme-aware, single file. |
 | `scripts/mnemazine-telegram-poll.sh` | your machine | ~5-min tick: consume run-now flag / daily window → pull + run. |
-| `scripts/mnemazine-telegram-sync.sh` | your machine | rsync pull (move) + `npm start`. |
+| `scripts/mnemazine-telegram-sync.sh` | your machine | rsync copy to staging + `npm start` + delete pulled host files only after success. |
 | `scripts/com.mnemazine.telegram-sync.plist.template` | your machine | launchd agent (macOS) for the poll tick. |
 
 ## Setup
@@ -103,15 +105,41 @@ sed 's#__REPO__#'"$PWD"'#g' \
 launchctl load ~/Library/LaunchAgents/com.mnemazine.telegram-sync.plist
 ```
 
-Override host/key/paths via `MNEMAZINE_VPS`, `MNEMAZINE_VPS_KEY`,
-`MNEMAZINE_REMOTE_INBOX`, `MNEMAZINE_ROOT` (see the script headers). On Linux,
-use a 5-minute cron entry calling `mnemazine-telegram-poll.sh` instead.
+Use a dedicated unprivileged host user, for example `deploy@host`, not a
+privileged login. Default remote paths are under that user's home:
+`mnemazine/inbox`, `mnemazine/reports`, and `mnemazine/bot`.
+
+Pin the SSH host key before enabling polling:
+
+```bash
+MNEMAZINE_VPS=deploy@example.com \
+MNEMAZINE_VPS_HOST_FINGERPRINT=SHA256:... \
+bash scripts/mnemazine-pin-vps-host.sh
+```
+
+Then put reviewed settings in `.mnemazine/config.env`:
+
+```bash
+MNEMAZINE_VPS=deploy@example.com
+MNEMAZINE_VPS_KEY=$HOME/.ssh/id_ed25519_mnemazine
+MNEMAZINE_REMOTE_INBOX=mnemazine/inbox
+MNEMAZINE_REMOTE_MUTATION=1
+```
+
+`MNEMAZINE_REMOTE_MUTATION=1` is deliberate: the poller consumes `.run-now`,
+updates `.last-run`, and the sync deletes remote copies only after local success.
+Without that flag the scripts fail closed. On Linux, use a 5-minute cron entry
+calling `mnemazine-telegram-poll.sh` instead.
 
 ## Security
 
 - The token is a secret — keep it in env / a secret store, never in git.
 - `initData` is HMAC-verified with the bot token; only allowlisted user ids pass.
 - The bot ignores messages from anyone outside `ALLOWED_CHAT_IDS`.
+- Rotate the bot token if the host, pm2 env, shell history, or logs may have
+  leaked. Rotate the SSH key if the host user or your workstation key may have
+  leaked. Re-pin `known_hosts` only after verifying the new host fingerprint
+  from the provider console or another trusted channel.
 
 ## Self-tests
 
