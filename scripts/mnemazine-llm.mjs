@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// Provider-abstracted LLM bridge for Mnemazine. Code-first engine is Claude
-// (headless `claude -p`); Codex is kept at parity (same llmJson contract) so
-// anything that works via Claude also works via Codex.
-//   provider: MNEMAZINE_LLM = 'claude' | 'codex' (unset = auto: Claude, else Codex)
+// Provider-abstracted LLM bridge for Mnemazine. In Codex sessions, Codex is the
+// default engine; Claude is only a fallback when Codex is unavailable.
+//   provider: MNEMAZINE_LLM = 'claude' | 'codex' (unset = Codex if present)
 // Both run as schema-instructed, web-capable headless agents. Default pipeline
 // never calls either — only the opt-in --deep path does.
 import { spawnSync, spawn } from 'node:child_process'
@@ -38,6 +37,7 @@ const HOME = os.homedir()
 // in order: explicit env -> login-shell PATH (respects the user's real install)
 // -> common absolute locations -> newest VSCode extension binary. Cached.
 let _claudeBin
+let _defaultProvider
 function resolveClaudeBin() {
   if (_claudeBin !== undefined) return _claudeBin
   if (process.env.MNEMAZINE_CLAUDE_BIN) return (_claudeBin = process.env.MNEMAZINE_CLAUDE_BIN)
@@ -74,10 +74,12 @@ function binExists(bin) {
 }
 
 export function defaultProvider() {
+  if (_defaultProvider) return _defaultProvider
   if (CONFIG_PROVIDER) return CONFIG_PROVIDER
-  if (binExists(resolveClaudeBin())) return 'claude'
-  if (binExists(CODEX_BIN)) return 'codex'
-  return 'claude'
+  const claudeBin = resolveClaudeBin()
+  if (binExists(CODEX_BIN)) return (_defaultProvider = 'codex')
+  if (binExists(claudeBin) && claudeUsable(claudeBin)) return (_defaultProvider = 'claude')
+  return (_defaultProvider = 'claude')
 }
 
 export function activeProvider(opts = {}) {
@@ -119,6 +121,46 @@ function codexExecArgs(cwd, opts = {}) {
   return args
 }
 
+function claudeUsable(bin) {
+  const res = spawnSync(bin, ['-p', '--output-format', 'json'], {
+    input: 'Return only {"ok":true}.',
+    encoding: 'utf8',
+    timeout: 15000
+  })
+  if (res.status !== 0) return false
+  try {
+    const envelope = JSON.parse(res.stdout || '{}')
+    if (envelope?.is_error) return false
+  } catch {}
+  return true
+}
+
+function strictOutputSchema(schema) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema
+  const out = { ...schema }
+  if (out.type === 'object' || out.properties) {
+    if (out.additionalProperties === undefined) out.additionalProperties = false
+    if (out.properties) {
+      out.properties = Object.fromEntries(
+        Object.entries(out.properties).map(([key, value]) => [key, strictOutputSchema(value)])
+      )
+    }
+  }
+  if (out.items) out.items = strictOutputSchema(out.items)
+  for (const key of ['anyOf', 'allOf', 'oneOf']) {
+    if (Array.isArray(out[key])) out[key] = out[key].map(strictOutputSchema)
+  }
+  return out
+}
+
+function procError(label, res) {
+  const stderr = String(res.stderr || '').trim()
+  if (stderr) return `${label} failed (status ${res.status}): ${stderr.slice(-400)}`
+  const stdout = String(res.stdout || '').trim()
+  if (stdout) return `${label} failed (status ${res.status}): ${stdout.slice(-400)}`
+  return `${label} failed (status ${res.status}): empty stderr/stdout`
+}
+
 // --- Codex backend (headless pattern: --output-schema + -o) ---
 async function codexJsonCall(prompt, schema, opts) {
   if (!binExists(CODEX_BIN)) throw new Error(`codex binary not found: ${CODEX_BIN}`)
@@ -127,14 +169,14 @@ async function codexJsonCall(prompt, schema, opts) {
   const schemaFile = path.join(work, 'schema.json')
   const outFile = path.join(work, 'out.json')
   const promptFile = path.join(work, 'prompt.md')
-  await fs.writeFile(schemaFile, JSON.stringify(schema), { encoding: 'utf8', mode: 0o600 })
+  await fs.writeFile(schemaFile, JSON.stringify(strictOutputSchema(schema)), { encoding: 'utf8', mode: 0o600 })
   await fs.writeFile(promptFile, prompt, { encoding: 'utf8', mode: 0o600 })
   try {
     const res = await runProc(CODEX_BIN, [
       ...codexExecArgs(cwd, opts),
       '--output-schema', schemaFile, '-o', outFile, '-'
     ], { input: await fs.readFile(promptFile, 'utf8'), timeoutMs: opts.timeoutMs || TIMEOUT_MS })
-    if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+    if (res.status !== 0) throw new Error(procError('codex exec', res))
     const raw = await fs.readFile(outFile, 'utf8').catch(() => '')
     if (!raw.trim()) throw new Error('codex returned empty output')
     try { return JSON.parse(raw) } catch (err) { throw new Error(`codex returned non-JSON: ${err.message}; head: ${raw.slice(0, 200)}`) }
@@ -157,7 +199,7 @@ async function claudeJsonCall(prompt, schema, opts) {
   const args = ['-p', '--output-format', 'json']
   if (tools.length) args.push('--allowedTools', tools.join(','))
   const res = await runProc(bin, args, { input: full, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
-  if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+  if (res.status !== 0) throw new Error(procError('claude -p', res))
   // --output-format json wraps the turn: { type:'result', result:'<text>', ... }
   let envelope
   try { envelope = JSON.parse(res.stdout) } catch { envelope = null }
@@ -183,7 +225,7 @@ export async function llmText(prompt, opts = {}) {
     const res = await runProc(CODEX_BIN, [
       ...codexExecArgs(opts.cwd || process.cwd(), opts), '-'
     ], { input: prompt, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
-    if (res.status !== 0) throw new Error(`codex exec failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+    if (res.status !== 0) throw new Error(procError('codex exec', res))
     return String(res.stdout || '').trim()
   }
   const bin = resolveClaudeBin()
@@ -191,7 +233,7 @@ export async function llmText(prompt, opts = {}) {
   const args = ['-p', '--output-format', 'json']
   if (opts.tools?.length) args.push('--allowedTools', opts.tools.join(','))
   const res = await runProc(bin, args, { input: prompt, timeoutMs: opts.timeoutMs || TIMEOUT_MS })
-  if (res.status !== 0) throw new Error(`claude -p failed (status ${res.status}): ${String(res.stderr || '').slice(-400)}`)
+  if (res.status !== 0) throw new Error(procError('claude -p', res))
   let envelope
   try { envelope = JSON.parse(res.stdout) } catch { envelope = null }
   return (envelope && typeof envelope.result === 'string' ? envelope.result : res.stdout).trim()

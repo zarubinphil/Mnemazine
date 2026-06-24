@@ -5,10 +5,11 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { llmAvailable, llmText } from './mnemazine-llm.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const INBOX = process.env.MNEMAZINE_INBOX || path.join(ROOT, 'inbox')
-const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
+const VAULT = resolveVault()
 const REPORTS = process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')
 const STATE = process.env.MNEMAZINE_STATE || path.join(ROOT, '.mnemazine/state')
 const CACHE = process.env.MNEMAZINE_CACHE || path.join(ROOT, '.mnemazine/cache/processed-hashes.json')
@@ -378,6 +379,25 @@ function parseJsonOutput(text) {
   try { return JSON.parse(raw.slice(start, end + 1)) } catch { return null }
 }
 
+function failRunState(payload, code = 1) {
+  return writeRunState({
+    ok: false,
+    inbox: payload.inbox,
+    processed: payload.processed,
+    cached_only: payload.cached_only,
+    failed: payload.failed,
+    deep: DEEP,
+    deep_required: REQUIRE_DEEP,
+    enrich_required: ENRICH_REQUIRED,
+    strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE,
+    synthesize: payload.synthesize,
+    vault: VAULT,
+    started_at: payload.started_at,
+    finished_at: new Date().toISOString(),
+    ...payload.extra
+  }).then(() => process.exit(code))
+}
+
 async function writeRunState(state) {
   await ensureDir(STATE)
   await fs.writeFile(path.join(STATE, 'last-run.json'), `${JSON.stringify(state, null, 2)}\n`, 'utf8')
@@ -396,6 +416,42 @@ function validateDeepRun({ synthesize, processed }) {
 
 async function recentNotes(limit = 8) {
   const notes = []
+  function cleanAction(text) {
+    return String(text || '')
+      .split(/\n\s*\n/)[0]
+      .replace(/^[-*]\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+  function section(text, names) {
+    for (const name of names) {
+      const re = new RegExp(`^##\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, 'mi')
+      const hit = text.match(re)
+      if (hit) return cleanAction(hit[1])
+    }
+    return ''
+  }
+  function present(text) {
+    return String(text || '')
+      .replace(/Security, review, and trust boundaries: source-backed operating pattern/g, 'Безопасность, ревью и границы доверия: проверенный рабочий паттерн')
+      .replace(/Miscellaneous knowledge signals: source-backed operating pattern/g, 'Прочие сигналы знаний: проверенный рабочий паттерн')
+      .replace(/Knowledge memory, vaults, and synthesis loops: source-backed operating pattern/g, 'Память знаний, vault и циклы синтеза: проверенный рабочий паттерн')
+      .replace(/Design systems and frontend quality: source-backed operating pattern/g, 'Дизайн-системы и качество фронтенда: проверенный рабочий паттерн')
+      .replace(/Mnemazine routing decision/g, 'решение для Mnemazine')
+      .replace(/operational risk and maintenance check/g, 'риск эксплуатации и поддержки')
+      .replace(/README-backed capability summary/g, 'что реально обещает README')
+      .replace(/Add a unified publish gate: vault quality, report quality, secret scan, diff review\./g, 'Собрать единый publish gate: качество vault, качество отчёта, поиск секретов и ревью изменений.')
+      .replace(/Manually review miscellaneous signals and either promote or forget them\./g, 'Вручную разобрать misc-сигналы: повысить до знания или забыть.')
+      .replace(/Automate nightly connection finding and weekly synthesis from final atoms\./g, 'Автоматизировать ночной поиск связей и weekly synthesis по финальным атомам.')
+      .replace(/Create browser smoke for generated HTML reports\./g, 'Сделать browser-smoke для сгенерированных HTML-отчётов.')
+      .replace(/Add ([^ ]+\/[^ ]+) to the capability review queue with one accept\/reject criterion\./g, 'Добавить $1 в очередь разбора возможностей с одним критерием: принять или отклонить.')
+      .replace(/Run a small local trial for ([^ ]+) only if the workflow fit is concrete\./g, 'Запустить маленький локальный пробный запуск для $1 только если понятна пригодность к рабочему сценарию.')
+      .replace(/Map ([^ ]+) README features to one concrete local workflow before installing\./g, 'Связать возможности README $1 с одним конкретным рабочим сценарием до установки.')
+      .replace(/с одним реальным рабочий сценарий/gi, 'с одним реальным рабочим сценарием')
+      .replace(/если пригодность для конкретного сценария конкретный/gi, 'если есть понятная пригодность для конкретного сценария')
+      .replace(/с одним критерием принять\/отклонить/gi, 'с одним критерием: принять или отклонить')
+      .trim()
+  }
   async function walk(dir) {
     for (const item of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (item.name.startsWith('graphify-out')) continue
@@ -404,8 +460,8 @@ async function recentNotes(limit = 8) {
       else if (item.isFile() && item.name.endsWith('.md')) {
         const stat = await fs.stat(file)
         const text = await fs.readFile(file, 'utf8').catch(() => '')
-        const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(file, '.md')
-        const action = text.match(/Next action:\s*(.+)$/mi)?.[1]?.trim() || text.match(/- Next action:\s*(.+)$/mi)?.[1]?.trim() || ''
+        const title = present(text.match(/^#\s+(.+)$/m)?.[1]?.trim() || path.basename(file, '.md'))
+        const action = present(section(text, ['Следующее действие', 'Next Action']) || text.match(/Next action:\s*(.+)$/mi)?.[1]?.trim() || text.match(/- Next action:\s*(.+)$/mi)?.[1]?.trim() || '')
         notes.push({ file: path.relative(VAULT, file), title, action, mtimeMs: stat.mtimeMs })
       }
     }
@@ -421,22 +477,22 @@ async function writeActionBrief(finishResult) {
   const inboxEntries = await fs.readdir(INBOX, { withFileTypes: true }).catch(() => [])
   const activeInboxCount = inboxEntries.filter(entry => entry.isFile() && !entry.name.startsWith('.')).length
   const lines = [
-    `# Mnemazine Action Brief — ${new Date().toISOString().slice(0, 10)}`,
+    `# Короткий отчёт Mnemazine — ${new Date().toISOString().slice(0, 10)}`,
     '',
-    '## Status',
+    '## Статус',
     '',
     `- Inbox: ${activeInboxCount}`,
     `- Vault: ${VAULT}`,
-    `- Quality gate: ${finishResult.quality?.ok ? 'ok' : 'check output'}`,
-    `- Graph refresh: ${finishResult.graph?.ok ? 'ok' : finishResult.graph?.code === 2 ? 'partial / semantic pending' : finishResult.graph?.skipped ? 'skipped' : 'failed'}`,
-    `- Weekly report: ${finishResult.weekly?.ok ? 'ok' : finishResult.weekly?.skipped ? 'skipped' : 'failed'}`,
-    `- Report quality: ${finishResult.report_quality?.ok ? 'ok' : finishResult.report_quality?.skipped ? 'skipped' : 'failed'}`,
+    `- Гейт качества: ${finishResult.quality?.ok ? 'ok' : 'проверь вывод'}`,
+    `- Обновление графа: ${finishResult.graph?.ok ? 'ok' : finishResult.graph?.code === 2 ? 'частично / semantic pending' : finishResult.graph?.skipped ? 'пропущено' : 'failed'}`,
+    `- Недельный отчёт: ${finishResult.weekly?.ok ? 'ok' : finishResult.weekly?.skipped ? 'пропущен' : 'failed'}`,
+    `- Качество отчёта: ${finishResult.report_quality?.ok ? 'ok' : finishResult.report_quality?.skipped ? 'пропущено' : 'failed'}`,
     '',
-    '## Next Actions',
+    '## Следующие действия',
     '',
     ...(notes.length
       ? notes.map(note => `- ${note.title}${note.action ? ` — ${note.action}` : ''} (${note.file})`)
-      : ['- No recent notes found.'])
+      : ['- Свежие заметки не найдены.'])
   ]
   const out = path.join(dir, 'last-action-brief.md')
   await fs.writeFile(out, `${lines.join('\n')}\n`, 'utf8')
@@ -445,6 +501,7 @@ async function writeActionBrief(finishResult) {
 
 async function finishRun(runStartedAt) {
   const result = {}
+  result.tool_queue = runLocalNodeScript('mnemazine-tool-decision-queue.mjs', ['--changed-since', runStartedAt, '--session', new Date().toISOString().slice(0, 10)])
   result.quality = runLocalNodeScript('mnemazine-vault-quality-gate.mjs', ['--changed-since', runStartedAt, '--max-failures', '50'])
   result.graph = runLocalNodeScript('mnemazine-refresh-graphify.mjs', ['--vault', VAULT, '--mode', 'auto', '--json'])
   result.weekly = runLocalNodeScript('mnemazine-weekly-brief-html.mjs')
@@ -453,7 +510,13 @@ async function finishRun(runStartedAt) {
     ? runLocalNodeScript('mnemazine-report-quality-gate.mjs', ['--report', weeklyReport])
     : { skipped: true, reason: 'weekly report path missing' }
   result.brief = await writeActionBrief(result)
-  result.visual_report = runLocalNodeScript('mnemazine-postrun-knowledge-report.mjs', ['--run-id', `local-${new Date().toISOString().slice(0, 10)}`, '--since-days', '14'])
+  result.visual_report = runLocalNodeScript('mnemazine-postrun-knowledge-report.mjs', ['--run-id', `local-${new Date().toISOString().slice(0, 10)}`, '--changed-since', runStartedAt])
+  const visualReport = result.visual_report?.stdout?.match(/"html":\s*"([^"]+)"/)?.[1] || ''
+  result.human_layer = runLocalNodeScript('mnemazine-human-layer-gate.mjs', [
+    '--changed-since',
+    runStartedAt,
+    ...(visualReport ? ['--report', visualReport] : [])
+  ])
   return result
 }
 
@@ -568,13 +631,41 @@ async function main() {
     console.error(JSON.stringify({ ok: false, failure, missing_final_notes: missingFinalNotes }, null, 2))
     process.exit(1)
   }
+  // Deep + final stage before archive: Russian humanizer digest + human-layer
+  // gate. If this fails, sources stay in inbox for a safe retry.
+  if (DEEP) {
+    const digest = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs'), '--changed-since', runStartedAt], { stdio: 'inherit', env: process.env })
+    if (digest.status !== 0) {
+      await failRunState({
+        inbox: entries.length,
+        processed,
+        cached_only: cachedOnly,
+        failed,
+        synthesize,
+        started_at: runStartedAt,
+        extra: { failure: 'digest failed before archive' }
+      }, digest.status || 1)
+    }
+    const refs = [...new Set(toArchive.map(item => sourceRef(item.hash)))]
+    const humanArgs = [path.join(ROOT, 'scripts/mnemazine-human-layer-gate.mjs'), '--notes-only', '--changed-since', runStartedAt]
+    if (refs.length) humanArgs.push('--source-ref', refs.join(','))
+    const human = spawnSync(process.execPath, humanArgs, { encoding: 'utf8', env: process.env })
+    if (human.stdout) process.stdout.write(human.stdout)
+    if (human.stderr) process.stderr.write(human.stderr)
+    if (human.status !== 0) {
+      await failRunState({
+        inbox: entries.length,
+        processed,
+        cached_only: cachedOnly,
+        failed,
+        synthesize,
+        started_at: runStartedAt,
+        extra: { failure: 'human layer gate failed before archive' }
+      }, human.status || 1)
+    }
+  }
   const archived = []
   for (const item of toArchive) archived.push(await archiveFile(item.file, item.hash))
-  // Deep + final stage: Russian humanizer digest, AFTER the graph so connections
-  // are real. Writes a Справка into each note + one session summary note.
-  if (DEEP) {
-    spawnSync(process.execPath, [path.join(ROOT, 'scripts/mnemazine-digest.mjs'), '--changed-since', runStartedAt], { stdio: 'inherit', env: process.env })
-  }
   const finish = FINISH ? await finishRun(runStartedAt) : { skipped: true }
   const result = { ok: true, inbox: entries.length, processed, cached_only: cachedOnly, failed, archived: archived.length, deep: DEEP, deep_required: REQUIRE_DEEP, enrich_required: ENRICH_REQUIRED, strict_archive_knowledge: STRICT_ARCHIVE_KNOWLEDGE, synthesize, finish, vault: VAULT, started_at: runStartedAt, finished_at: new Date().toISOString() }
   await writeRunState(result)

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -66,7 +67,7 @@ function runWorker(job) {
 }
 
 async function main() {
-  const vault = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+  const vault = resolveVault({ cli: arg('vault') })
   const graph = path.resolve(arg('graph', path.join(vault, 'graphify-out/graph.json')))
   const shardsDir = path.resolve(arg('shards-dir', path.join(vault, `.mnemazine/semantic-shards/${RUN_ID}`)))
   const logsDir = path.resolve(arg('logs-dir', path.join(shardsDir, 'logs')))

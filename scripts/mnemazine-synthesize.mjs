@@ -4,6 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { llmAvailable, llmJson, fenceUntrusted } from './mnemazine-llm.mjs'
 import { verifyLocal, verifyDeep, isPublicHttpUrl } from './mnemazine-verify.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -14,7 +15,7 @@ function arg(name, fallback = '') {
   return hit.includes('=') ? hit.split('=').slice(1).join('=') : argv[argv.indexOf(hit) + 1] || fallback
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 const EXTRACTS = path.resolve(arg('extracts', process.env.MNEMAZINE_EXTRACTS || path.join(ROOT, '.mnemazine/cache/extracted')))
 const SESSION = arg('session', new Date().toISOString().slice(0, 10))
 const MIN_CLUSTER_CHARS = Number(arg('min-cluster-chars', '80'))
@@ -69,55 +70,112 @@ const topicTemplates = {
     what: 'Agent systems are reusable operating capabilities: skills, MCP connections, memory, review roles, and harness rules that make an AI assistant behave consistently across tasks.',
     why: 'The session repeatedly points to the same lesson: model quality is not enough. Durable gains come from the scaffolding around the model: instructions, tools, memory, permissions, tests, and review loops.',
     how: '- Convert repeated procedures into Skills.\n- Keep tool access behind explicit permission boundaries.\n- Store memory as linked knowledge and decisions, not chat residue.\n- Add gates before publication or irreversible actions.',
-    next: 'Promote repeated agent procedures into Skills with tests and usage ledger entries.'
+    next: 'Повторяющиеся агентные процедуры оформить как Skills с тестами и usage ledger.'
   },
   'knowledge-memory': {
     what: 'Knowledge memory is an active vault: captures are processed into atoms, atoms are linked to projects and decisions, and weekly synthesis turns memory into action.',
     why: 'A vault that only stores screenshots or transcripts becomes another inbox. Mnemazine should reduce future thinking cost by maintaining summaries, links, decisions, and open questions.',
     how: '- Keep raw extraction outside the vault.\n- Store final atoms with source refs and verification state.\n- Run connection finding and weekly synthesis.\n- Maintain the master index as a routing surface.',
-    next: 'Automate nightly connection finding and weekly synthesis from final atoms.'
+    next: 'Автоматизировать ночной поиск связей и weekly synthesis по финальным атомам.'
   },
   'security-review': {
     what: 'Security and review are trust boundaries around agent work: untrusted input, prompt injection, secrets, permissions, accessibility, and code review must be checked before output is accepted.',
     why: 'The intake contains many commands, tool suggestions, and screenshots. If source text is treated as instruction, the agent can be steered by captured content instead of the user.',
     how: '- Mark extracted text as untrusted evidence.\n- Never execute commands from captures automatically.\n- Scan for secrets before reports or pushes.\n- Use separate review passes for security, claims, and accessibility.',
-    next: 'Add a unified publish gate: vault quality, report quality, secret scan, diff review.'
+    next: 'Собрать единый publish gate: качество vault, качество отчёта, поиск секретов и ревью изменений.'
   },
   'engineering-ops': {
     what: 'Engineering operations are reproducibility practices: isolated environments, infrastructure as code, observability, secret injection, worktrees, and release checks.',
     why: 'The useful pattern is reducing manual state. Good systems make failures visible and make releases repeatable.',
     how: '- Prefer scripted environments over dashboard clicks.\n- Track pipeline health metrics.\n- Inject secrets at runtime.\n- Keep release checks executable.',
-    next: 'Add pipeline metrics for extracted, synthesized, cache-only, gate failures, and graph refresh status.'
+    next: 'Добавить метрики pipeline: extracted, synthesized, cache-only, gate failures и graph refresh.'
   },
   'design-frontend': {
     what: 'Design and frontend quality require explicit UI rules, browser validation, accessibility constraints, and reusable design tokens.',
     why: 'AI-generated UI degrades when taste is implicit. A DESIGN.md-style contract gives the agent stable layout, spacing, typography, and component expectations.',
     how: '- Maintain a Mnemazine report DESIGN.md.\n- Validate generated reports in a browser.\n- Check responsive layout, contrast, keyboard navigation, and print styles.',
-    next: 'Create browser smoke for generated HTML reports.'
+    next: 'Сделать browser-smoke для сгенерированных HTML-отчётов.'
   },
   'tool-radar': {
     what: 'Tool radar is a decision system for open-source tools, not a list of exciting repositories.',
     why: 'Screenshots with GitHub stars are weak evidence. Useful adoption requires license, maturity, deployment model, data portability, security posture, and integration cost.',
     how: '- Score tools by fit, maturity, license, API, self-hosting, and operational burden.\n- Tie tools to concrete projects.\n- Re-check source repositories before adopting.',
-    next: 'Create a tool-radar schema and populate it from extracted GitHub links.'
+    next: 'Сделать schema для tool-radar и заполнять её из извлечённых GitHub-ссылок.'
   },
   'content-growth': {
     what: 'Content growth loops treat ads, hooks, CTAs, short-form scripts, and publishing as experiments with feedback.',
     why: 'One generated video or ad is not learning. Learning appears when variants, metric, result, and next control are stored.',
     how: '- Store hypothesis, channel, variant, metric, result, and decision.\n- Keep winners as controls.\n- Discard weak variants without preserving noise as knowledge.',
-    next: 'Add a Content Experiment note template.'
+    next: 'Добавить шаблон заметки для Content Experiment.'
   },
   'research-workflow': {
     what: 'Research workflow means claims are sourced before they become operational knowledge.',
     why: 'A source link is not decoration. It should confirm, correct, or constrain the conclusion.',
     how: '- Separate extracted claim from verified conclusion.\n- Prefer official docs and primary repositories.\n- Record confidence and what the source changed.',
-    next: 'Add `source_changed_what` to final atom schema.'
+    next: 'Добавить `source_changed_what` в schema финального атома.'
   },
   misc: {
     what: 'Miscellaneous signals are captured items that do not yet form a strong enough reusable cluster.',
     why: 'Keeping them separate prevents weak or noisy items from polluting stronger knowledge atoms.',
     how: '- Review manually.\n- Promote only recurring or high-value ideas.\n- Move low-signal material to forget/archive.',
-    next: 'Manually review miscellaneous signals and either promote or forget them.'
+    next: 'Вручную разобрать misc-сигналы: повысить до знания или забыть.'
+  }
+}
+
+const topicTemplatesRu = {
+  'agent-systems': {
+    what: 'Агентная система - это набор повторяемых возможностей вокруг модели: skills, MCP, память, роли ревью, правила harness и release gates.',
+    why: 'Качество даёт не только модель. Стабильность появляется, когда вокруг неё есть инструменты, память, разрешения, тесты и ревью.',
+    how: ['Повторяющиеся процедуры превращать в Skills.', 'Доступ к инструментам держать за явными границами разрешений.', 'Память хранить как связанные знания и решения.', 'Перед публикацией держать gate.'],
+    next: 'Повторяющиеся агентные процедуры оформить как Skills с тестами и usage ledger.'
+  },
+  'knowledge-memory': {
+    what: 'Память знаний - это active vault: сырьё превращается в атомы, атомы связываются с проектами и решениями, weekly synthesis превращает память в действия.',
+    why: 'Vault со скриншотами быстро становится ещё одним inbox. Польза появляется, когда заметки уменьшают будущую стоимость мышления.',
+    how: ['Сырой extraction держать вне финального vault.', 'Финальные атомы писать с source refs и verification status.', 'Регулярно строить связи и weekly synthesis.', 'Мастер-индекс держать как routing surface.'],
+    next: 'Автоматизировать nightly connection finding и weekly synthesis по финальным атомам.'
+  },
+  'security-review': {
+    what: 'Безопасность и ревью - это границы доверия вокруг агентной работы: untrusted input, prompt injection, секреты, permissions, accessibility и code review проверяются до принятия результата.',
+    why: 'Inbox содержит команды, скриншоты, сайты и tool suggestions. Если принять захваченный текст за инструкцию, агент начнёт слушать источник, а не владельца.',
+    how: ['Помечать extraction как недоверенное evidence.', 'Не выполнять команды из захваченного текста автоматически.', 'Сканировать секреты перед отчётами и push.', 'Разделять review по security, claims и accessibility.'],
+    next: 'Собрать единый publish gate: vault quality, report quality, secret scan, diff review.'
+  },
+  'engineering-ops': {
+    what: 'Инженерные операции - это воспроизводимость: окружения, IaC, observability, secret injection, worktrees и release checks.',
+    why: 'Хорошая система уменьшает ручное состояние: failures видны, delivery повторяемый.',
+    how: ['Скрипты вместо dashboard-clicks.', 'Метрики здоровья pipeline.', 'Секреты инжектить runtime-способом.', 'Release checks держать исполняемыми.'],
+    next: 'Добавить метрики pipeline: extracted, synthesized, cache-only, gate failures, graph refresh.'
+  },
+  'design-frontend': {
+    what: 'Качество UI требует явного дизайн-контракта: правила интерфейса, browser validation, accessibility constraints и reusable design tokens.',
+    why: 'AI UI быстро портится, если вкус не записан. DESIGN.md-style контракт задаёт layout, spacing, типографику и ожидаемое поведение компонентов.',
+    how: ['Держать DESIGN.md для Mnemazine reports.', 'Проверять generated reports в браузере.', 'Смотреть responsive layout, contrast, keyboard navigation и print styles.'],
+    next: 'Создать browser smoke для generated HTML reports.'
+  },
+  'tool-radar': {
+    what: 'Tool radar - это система решений по open-source, а не список красивых репозиториев.',
+    why: 'Скриншот со stars - слабое evidence. Нужны license, maturity, deployment model, data portability, security posture и integration cost.',
+    how: ['Оценивать fit, maturity, license, API, self-hosting и operational burden.', 'Связывать инструмент с конкретным проектом.', 'Перед adoption перепроверять primary source.'],
+    next: 'Сделать schema для tool-radar и заполнять её из GitHub links.'
+  },
+  'content-growth': {
+    what: 'Контентные петли роста рассматривают ads, hooks, CTA, scripts и публикации как эксперименты с обратной связью.',
+    why: 'Один ролик или объявление ещё не обучение. Обучение появляется, когда есть variant, metric, result и next control.',
+    how: ['Хранить hypothesis, channel, variant, metric, result и decision.', 'Победителей держать как controls.', 'Слабые варианты удалять без превращения шума в знания.'],
+    next: 'Добавить template для Content Experiment note.'
+  },
+  'research-workflow': {
+    what: 'Research workflow значит: claims получают источники до того, как становятся рабочим знанием.',
+    why: 'Ссылка должна подтверждать, исправлять или ограничивать вывод. Иначе это декорация.',
+    how: ['Отделять extracted claim от verified conclusion.', 'Предпочитать official docs и primary repositories.', 'Писать, что именно источник изменил в выводе.'],
+    next: 'Добавить поле `source_changed_what` в final atom schema.'
+  },
+  misc: {
+    what: 'Прочие сигналы - материалы, которые пока не сложились в сильный reusable cluster.',
+    why: 'Отдельный misc-кластер защищает сильные знания от слабого шума.',
+    how: ['Проверить вручную.', 'Повышать до знания только повторяющиеся или ценные идеи.', 'Низкий сигнал отправлять в forget/archive.'],
+    next: 'Вручную разобрать misc-сигналы: promote или forget.'
   }
 }
 
@@ -188,6 +246,21 @@ function clusterTitle(id) {
   return clusterRules.find(rule => rule.id === id)?.title || 'Miscellaneous knowledge signals'
 }
 
+function clusterTitleRu(id) {
+  const map = {
+    'agent-systems': 'Агентные системы и переиспользуемые возможности',
+    'knowledge-memory': 'Память знаний, vault и циклы синтеза',
+    'security-review': 'Безопасность, ревью и границы доверия',
+    'engineering-ops': 'Инженерные операции и воспроизводимая доставка',
+    'design-frontend': 'Дизайн-системы и качество фронтенда',
+    'tool-radar': 'Радар инструментов и выбор open-source',
+    'content-growth': 'Контентные эксперименты и петли роста',
+    'research-workflow': 'Исследовательский workflow и проверка источников',
+    misc: 'Прочие сигналы знаний'
+  }
+  return map[id] || map.misc
+}
+
 function publicSources(text) {
   const explicit = extractUrls(text).map(url => ({ name: url.includes('github.com') ? 'GitHub source' : 'Source link', url }))
   const hinted = sourceHints
@@ -234,11 +307,14 @@ async function fetchText(url, limit = 40000) {
 
 function readmePoints(readme, max = 6) {
   const points = []
-  for (const line of String(readme || '').split('\n')) {
+  for (const line of stripHtmlText(readme).split('\n')) {
     const clean = compact(line.replace(/^#+\s*/, '').replace(/^[-*]\s+/, ''), 220)
     if (clean.length < 32) continue
     if (/^(install|usage|license|contributing|table of contents|badges?)$/i.test(clean)) continue
-    if (/^!\[|^<img|^\[!?\[/.test(line.trim())) continue
+    if (/^!\[|^<img|^\[!?\[|^window\.|^document\.|^function\s/i.test(line.trim())) continue
+    if (/\b(src|href|alt|title)=["'][^"']*["']/i.test(clean)) continue
+    if (/https?:\/\/\S+\.(?:svg|png|jpe?g|gif|webp)(?:\?\S*)?$/i.test(clean)) continue
+    if (/<[a-z][\s\S]*>/i.test(clean)) continue
     points.push(clean)
     if (points.length >= max) break
   }
@@ -249,7 +325,28 @@ function htmlDescription(html) {
   const raw = String(html || '')
   const hit = raw.match(/<meta\s+name="description"\s+content="([^"]+)"/i) ||
     raw.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i)
-  return hit ? compact(hit[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'), 260) : ''
+  return hit ? compact(decodeEntities(hit[1]), 260) : ''
+}
+
+function decodeEntities(text) {
+  return String(text || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+}
+
+function stripHtmlText(text) {
+  return decodeEntities(String(text || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '\n')
+    .replace(/<style[\s\S]*?<\/style>/gi, '\n')
+    .replace(/<!--[\s\S]*?-->/g, '\n')
+    .replace(/<[^>]+>/g, '\n'))
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
 }
 
 async function fetchRawReadme(repoRef, preferredBranch = '') {
@@ -279,7 +376,7 @@ async function enrichClusterFromGithub(cluster, sources) {
     api = {
       full_name: `${repoRef.owner}/${repoRef.repo}`,
       html_url: repoRef.url,
-      description: htmlDescription(repoHtml) || readmePoints(rawReadme.text, 1)[0] || 'official GitHub repository',
+      description: htmlDescription(repoHtml) || readmePoints(rawReadme.text, 1)[0] || 'официальный GitHub-репозиторий',
       stargazers_count: 'unknown',
       forks_count: 'unknown',
       open_issues_count: 'unknown',
@@ -293,14 +390,14 @@ async function enrichClusterFromGithub(cluster, sources) {
   const readme = rawReadme.text
   const release = await fetchJson(`https://api.github.com/repos/${repoRef.owner}/${repoRef.repo}/releases/latest`)
   const points = readmePoints(readme)
-  const license = api.license?.spdx_id || api.license?.name || 'unknown license'
+  const license = api.license?.spdx_id || api.license?.name || 'лицензия неизвестна'
   const pushed = api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'
-  const releaseLine = release?.tag_name ? `${release.tag_name} (${String(release.published_at || '').slice(0, 10) || 'date unknown'})` : 'no latest release returned by GitHub API'
+  const releaseLine = release?.tag_name ? `${release.tag_name} (${String(release.published_at || '').slice(0, 10) || 'дата неизвестна'})` : 'GitHub API не вернул latest release'
   const addedFacts = [
-    `${api.full_name}: ${api.description || 'official GitHub repository'}.`,
-    `GitHub metadata: ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, primary language ${api.language || 'unknown'}.`,
-    `Repository freshness: default branch ${api.default_branch || 'unknown'}, last push ${pushed}, latest release ${releaseLine}.`,
-    ...points.slice(0, 5).map(point => `README signal: ${point}`)
+    `${api.full_name}: ${api.description || 'официальный GitHub-репозиторий'}.`,
+    `Метаданные GitHub: ${api.stargazers_count} звёзд, ${api.forks_count} форков, ${api.open_issues_count} открытых issues, лицензия ${license}, основной язык ${api.language || 'unknown'}.`,
+    `Свежесть репозитория: основная ветка ${api.default_branch || 'unknown'}, последний push ${pushed}, последний release ${releaseLine}.`,
+    ...points.slice(0, 5).map(point => `Сигнал README: ${point}`)
   ]
   const addedSources = [
     api.html_url,
@@ -308,14 +405,43 @@ async function enrichClusterFromGithub(cluster, sources) {
     release?.html_url
   ].filter(Boolean)
   const enriched = [
-    `Official GitHub enrichment for ${api.full_name}.`,
-    `Description: ${api.description || 'No GitHub description provided.'}`,
-    `Metadata: ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, ${api.language || 'unknown'} language, pushed ${pushed}.`,
-    `Latest release: ${releaseLine}.`,
-    points.length ? `README extracted signals:\n${points.map(point => `- ${point}`).join('\n')}` : 'README extraction returned no stable feature bullets.',
-    `Local seed refs: ${cluster.records.map(r => r.source_ref).join(', ')}.`
+    `Расширение по официальному GitHub для ${api.full_name}.`,
+    `Описание: ${api.description || 'GitHub не дал описание.'}`,
+    `Метаданные: ${api.stargazers_count} звёзд, ${api.forks_count} форков, ${api.open_issues_count} открытых issues, ${license}, язык ${api.language || 'unknown'}, последний push ${pushed}.`,
+    `Последний release: ${releaseLine}.`,
+    points.length ? `Из README извлечены стабильные сигналы:\n${points.map(point => `- ${point}`).join('\n')}` : 'README не дал устойчивых feature-пунктов без ручной проверки.',
+    `Локальные source refs: ${cluster.records.map(r => r.source_ref).join(', ')}.`
   ].join('\n\n')
   return { enriched, addedSources, addedFacts, github: { api, readmeUrl, release, points } }
+}
+
+async function enrichClusterFromSources(cluster, sources) {
+  const picked = sources.filter(source => isPublicHttpUrl(source.url)).slice(0, 4)
+  if (!picked.length) return null
+  const addedSources = []
+  const addedFacts = []
+  const sections = []
+  for (const source of picked) {
+    const text = await fetchText(source.url, 40000)
+    if (!text) continue
+    const desc = htmlDescription(text) || readmePoints(text, 1)[0] || `${source.name} is reachable at ${source.url}.`
+    const points = readmePoints(text, 3)
+    addedSources.push(source.url)
+    addedFacts.push(`${source.name}: ${desc}`)
+    for (const point of points) addedFacts.push(`${source.name}: сигнал источника - ${point}`)
+    sections.push(`${source.name} (${source.url})\n${[desc, ...points].filter(Boolean).map(p => `- ${p}`).join('\n')}`)
+    if (addedFacts.length >= 6) break
+  }
+  if (!addedSources.length || addedFacts.length < MIN_ADDED_FACTS) return null
+  const template = topicTemplates[cluster.id] || topicTemplates.misc
+  const enriched = [
+    `Детерминированное расширение источниками для ${clusterTitleRu(cluster.id)}.`,
+    template.what,
+    template.why,
+    sections.join('\n\n'),
+    `Локальные source refs: ${cluster.records.map(r => r.source_ref).join(', ')}.`
+  ].join('\n\n')
+  return { enriched, addedSources, addedFacts, sourceFacts: { sources: addedSources, facts: addedFacts } }
 }
 
 function atomsFromGithub(part, sources) {
@@ -329,38 +455,60 @@ function atomsFromGithub(part, sources) {
   const releaseLine = github.release?.tag_name || 'no latest release returned'
   return [
     {
-      title: `${repo}: verified tool identity and adoption signal`,
-      what: `${repo} is the official GitHub repository for ${api.description || 'the tool captured in the local source'}. GitHub reports ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, ${license}, primary language ${api.language || 'unknown'}, and last push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}.`,
-      why: 'This turns a screenshot/star-count capture into a checked adoption signal with a primary source, not unchecked extraction.',
-      how: ['Use the repo metadata as the first pass: license, freshness, stars, forks, issues.', 'Open the README before adopting; treat social-card claims as hints until repo/docs confirm them.', 'Record adoption decision separately: install now, trial later, or ignore.'],
+      title: `${repo}: проверенная карточка инструмента`,
+      what: `${repo} - официальный GitHub-репозиторий инструмента из inbox. GitHub показывает: ${api.stargazers_count} stars, ${api.forks_count} forks, ${api.open_issues_count} open issues, лицензия ${license}, основной язык ${api.language || 'unknown'}, последний push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}.`,
+      why: 'Это превращает скриншот или карточку со звёздами в проверяемую запись: есть primary source, дата свежести, лицензия и базовый риск.',
+      how: ['Сначала смотреть метаданные: лицензия, свежесть, stars, forks, issues.', 'Перед установкой открыть README и issues, скриншот считать только подсказкой.', 'Решение фиксировать отдельно: установить сейчас, протестировать позже или забыть.'],
       sources: sourceUrls,
-      next: `Review ${repo} README and decide whether it belongs in the agent capability registry.`
+      next: `Прочитать README ${repo} и решить, нужен ли он в реестре возможностей.`
     },
     {
-      title: `${repo}: README-backed capability summary`,
-      what: points.length ? points.slice(0, 4).join(' ') : `${repo} has an official README, but Mnemazine could not extract stable feature bullets from it.`,
-      why: 'README text is closer to operational truth than a screenshot caption. It tells what the maintainer actually ships and documents.',
-      how: points.slice(0, 5).map(point => `Check: ${point}`),
+      title: `${repo}: что реально обещает README`,
+      what: points.length ? points.slice(0, 4).join(' ') : `${repo} имеет официальный README, но Mnemazine не нашла в нём устойчивые продуктовые тезисы без ручной проверки.`,
+      why: 'README ближе к рабочей правде, чем подпись на скриншоте. Он показывает, что авторы реально поддерживают и документируют.',
+      how: points.slice(0, 5).map(point => `Проверить по README: ${point}`),
       sources: sourceUrls,
-      next: `Map ${repo} README features to one concrete local workflow before installing.`
+      next: `Связать возможности ${repo} с одним конкретным рабочим сценарием до установки.`
     },
     {
-      title: `${repo}: operational risk and maintenance check`,
-      what: `Risk surface: ${api.open_issues_count} open issues, latest release ${releaseLine}, last push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}, license ${license}.`,
-      why: 'A popular repo can still be a bad dependency if release cadence, license, or issue volume do not fit the workflow.',
-      how: ['Check open issues for security, data-loss, and install failures.', 'Prefer trial in a disposable workspace before adding it to global agent rules.', 'If it becomes a Skill/MCP/plugin, register usage and source ledgers.'],
+      title: `${repo}: риск эксплуатации и поддержки`,
+      what: `Поверхность риска: ${api.open_issues_count} open issues, последний release ${releaseLine}, последний push ${api.pushed_at ? api.pushed_at.slice(0, 10) : 'unknown'}, лицензия ${license}.`,
+      why: 'Популярный репозиторий всё равно может быть плохой зависимостью, если релизы, лицензия или issue-профиль не подходят под workflow.',
+      how: ['Проверить issues на security, потерю данных и ошибки установки.', 'Сначала гонять в одноразовом workspace, не добавлять сразу в глобальные правила агента.', 'Если это станет Skill/MCP/plugin, записать source ledger и usage ledger.'],
       sources: sourceUrls,
-      next: `Run a small local trial for ${repo} only if the workflow fit is concrete.`
+      next: `Запустить маленький локальный пробный запуск для ${repo} только при понятной пригодности к рабочему сценарию.`
     },
     {
-      title: `${repo}: Mnemazine routing decision`,
-      what: `This atom links the local capture (${part.records.map(record => record.source_ref).join(', ')}) to primary GitHub evidence for ${repo}.`,
-      why: 'The useful memory is not "saw a repo". The useful memory is the routing decision: what the repo does, whether it fits, what risk remains, and what action follows.',
-      how: ['Store the repo as a candidate capability, not an instruction to install.', 'If adopted, mirror docs/skill metadata and log usage.', 'If rejected, record the reason so the same shiny repo does not return as noise.'],
+      title: `${repo}: решение для Mnemazine`,
+      what: `Этот атом связывает локальный захват с primary GitHub evidence по ${repo}. Это не команда установить, а кандидат на разбор.`,
+      why: 'Полезная память - не "увидел репозиторий", а решение: что инструмент делает, подходит ли он, какой риск остаётся и что делать дальше.',
+      how: ['Хранить репозиторий как кандидата в рабочие возможности, не как инструкцию к установке.', 'Если принять, зеркалировать docs/skill metadata и логировать usage.', 'Если отклонить, записать причину, чтобы репозиторий не возвращался шумом.'],
       sources: sourceUrls,
-      next: `Add ${repo} to the capability review queue with one accept/reject criterion.`
+      next: `Добавить ${repo} в очередь разбора возможностей с одним критерием: принять или отклонить.`
     }
   ]
+}
+
+function atomsFromSources(part, sources) {
+  const template = topicTemplatesRu[part.id] || topicTemplatesRu.misc
+  const facts = part.enrichment?.addedFacts || []
+  const sourceUrls = sources.map(source => source.url).filter(isPublicHttpUrl)
+  const how = Array.isArray(template.how) ? template.how : String(template.how || '').split('\n').map(line => line.replace(/^-\s*/, '').trim()).filter(Boolean)
+  return [
+    {
+      title: `${clusterTitleRu(part.id)}: проверенный рабочий паттерн`,
+      what: `${template.what} Источники добавили проверяемые опорные факты: ${facts.slice(0, 2).join(' ')}`,
+      why: template.why,
+      how: [...how, ...facts.slice(2, 4).map(fact => `Проверить по источнику: ${fact}`)].slice(0, 5),
+      sources: sourceUrls,
+      next: template.next
+    }
+  ]
+}
+
+function atomsFromDeterministic(part, sources) {
+  if (part.enrichment?.kind === 'github') return atomsFromGithub(part, sources)
+  return atomsFromSources(part, sources)
 }
 
 function recordTitle(record) {
@@ -379,17 +527,17 @@ function hostOf(url) {
 
 function topicSignals(cluster, sources) {
   const hosts = uniq(sources.map(source => hostOf(source.url)).filter(Boolean)).slice(0, 6)
-  const sourceLine = hosts.length ? `Detected public sources: ${hosts.join(', ')}.` : 'No stable public URL detected in this cluster.'
+  const sourceLine = hosts.length ? `Найдены публичные источники: ${hosts.join(', ')}.` : 'Стабильный публичный URL в кластере не найден.'
   const map = {
-    'agent-systems': ['Repeated agent capability signals: Skills, MCP, memory, browser tools, review roles, and harness rules.', sourceLine],
-    'knowledge-memory': ['Repeated memory signals: vault structure, connection finding, weekly synthesis, decisions, beliefs, and active indexes.', sourceLine],
-    'security-review': ['Repeated trust signals: prompt injection risk, secret handling, permissions, review gates, and accessibility checks.', sourceLine],
-    'engineering-ops': ['Repeated engineering signals: reproducible environments, IaC, worktrees, observability, release checks, and secret injection.', sourceLine],
-    'design-frontend': ['Repeated UI signals: DESIGN.md, taste rules, frontend structure, Playwright/browser checks, and WCAG constraints.', sourceLine],
-    'tool-radar': ['Repeated tool-radar signals: GitHub repositories, self-hosting options, AI tools, and open-source alternatives.', sourceLine],
-    'content-growth': ['Repeated growth signals: ad variants, hooks, CTAs, short-form generation, metrics, and winner/loser loops.', sourceLine],
-    'research-workflow': ['Repeated research signals: source gathering, claim review, evidence checking, drafting, and revision.', sourceLine],
-    misc: ['Low-confidence miscellaneous signals kept separate from stronger clusters.', sourceLine]
+    'agent-systems': ['Повторяются агентные сигналы: Skills, MCP, память, browser tools, роли ревью и harness rules.', sourceLine],
+    'knowledge-memory': ['Повторяются сигналы памяти: структура vault, поиск связей, weekly synthesis, decisions, beliefs и active indexes.', sourceLine],
+    'security-review': ['Повторяются сигналы доверия: prompt injection, секреты, permissions, review gates и accessibility checks.', sourceLine],
+    'engineering-ops': ['Повторяются инженерные сигналы: воспроизводимые окружения, IaC, worktrees, observability, release checks и secret injection.', sourceLine],
+    'design-frontend': ['Повторяются UI-сигналы: DESIGN.md, taste rules, frontend structure, Playwright/browser checks и WCAG constraints.', sourceLine],
+    'tool-radar': ['Повторяются tool-radar сигналы: GitHub repos, self-hosting, AI tools и open-source alternatives.', sourceLine],
+    'content-growth': ['Повторяются growth-сигналы: ad variants, hooks, CTA, short-form generation, metrics и winner/loser loops.', sourceLine],
+    'research-workflow': ['Повторяются research-сигналы: сбор источников, проверка claims, evidence, drafting и revision.', sourceLine],
+    misc: ['Слабые misc-сигналы отделены от сильных knowledge atoms.', sourceLine]
   }
   return map[cluster.id] || map.misc
 }
@@ -424,20 +572,21 @@ function chunks(values, size) {
 
 function makeNote(cluster) {
   const text = cluster.records.map(record => record.text).join('\n\n')
-  const baseTitle = clusterTitle(cluster.id)
+  const baseTitle = clusterTitleRu(cluster.id)
   const title = cluster.partCount > 1 ? `${baseTitle} ${cluster.part}/${cluster.partCount}` : baseTitle
-  const template = topicTemplates[cluster.id] || topicTemplates.misc
+  const template = topicTemplatesRu[cluster.id] || topicTemplatesRu.misc
   const sources = publicSources(text)
   const signals = topicSignals(cluster, sources)
   const sourceRefs = cluster.records.map(record => `- ${record.source_ref}`)
   const sourceLines = sources.length
     ? sources.map(source => `- ${source.name}: ${source.url}`)
-    : ['- No public source detected in extraction; external verification required before operational adoption.']
+    : ['- Публичный источник не найден в extraction; перед применением нужна внешняя проверка.']
   const sourceStatus = sources.length ? 'local synthesis with public source expansion' : 'local synthesis; external verification required'
   const localVerdict = verifyLocal(sources.map(s => s.url))
+  const how = Array.isArray(template.how) ? template.how.map(item => `- ${item}`).join('\n') : template.how
   const risk = sources.length
-    ? 'Public links were detected or added by topic hints, but claims still need project-specific validation before adoption.'
-    : 'No public source was available in extracted text; treat this as a local memory atom, not an externally verified claim.'
+    ? 'Публичные ссылки найдены или добавлены по source hints, но перед adoption claims всё равно надо проверить под конкретный проект.'
+    : 'Публичного источника в extraction не было; это локальный memory atom, а не внешне подтверждённый claim.'
   return `---
 title: "${title.replace(/"/g, '\\"')}"
 type: "knowledge-note"
@@ -453,47 +602,47 @@ cluster_fingerprint: "${fingerprint(cluster)}"
 
 # ${title}
 
-## What This Is
+## Что это
 
 ${template.what}
 
-Key session signals:
+Ключевые сигналы сессии:
 ${signals.map(signal => `- ${signal}`).join('\n')}
 
-## Why It Matters
+## Зачем это нужно
 
 ${template.why}
 
-This note condenses ${cluster.records.length} extracted source item${cluster.records.length === 1 ? '' : 's'} into reusable knowledge. Source-level extraction stays in \`.mnemazine/cache/extracted\`.
+Заметка сжимает ${cluster.records.length} исходных элементов в переиспользуемое знание. Source-level extraction остаётся в \`.mnemazine/cache/extracted\`.
 
-## How To Use It
+## Как использовать
 
-${template.how}
+${how}
 
-## Source
+## Источники
 
-Local source refs:
+Локальные source refs:
 ${sourceRefs.slice(0, 30).join('\n')}
-${sourceRefs.length > 30 ? `- ... ${sourceRefs.length - 30} more source refs kept in extraction cache` : ''}
+${sourceRefs.length > 30 ? `- ... ещё ${sourceRefs.length - 30} source refs сохранены в extraction cache` : ''}
 
-Public/source expansion:
+Публичные источники:
 ${sourceLines.join('\n')}
 
-## Verification
+## Проверка
 
-- **No automated fact-check ran.** This note is an unverified synthesis cluster (\`status: draft\`). Source URLs are detected from extracted text or added by topic hints — they are pointers, not confirmation that any specific claim is true.
-- Promote to \`status: final\` only after a human or the verify gate checks claims against the listed primary sources.
-- Confidence: low until verified — treat dates, prices, stars, security claims, and release status as unconfirmed.
-- Risk: ${risk}
+- **Автоматический fact-check не запускался.** Это unverified synthesis cluster (\`status: draft\`). URL из extraction или topic hints - указатели, не подтверждение конкретного claim.
+- Повышать до \`status: final\` только после проверки человеком или verify gate по primary sources.
+- Уверенность: низкая до проверки. Даты, цены, stars, security claims и release status считать неподтверждёнными.
+- Риск: ${risk}
 
-## Related Notes
+## Связанные заметки
 
 - [[Mnemazine Protocol]]
 - [[${clusterTitle(cluster.id)}]]
 
-## Reuse
+## Следующее действие
 
-- Next action: ${template.next}
+- ${template.next}
 `
 }
 
@@ -529,7 +678,7 @@ function atomPrompt(cluster, sources, materialOverride) {
   const urls = sources.map(s => s.url).join(', ') || 'none detected'
   return `You are Mnemazine's atomization agent. Split the enriched research material below into FOCUSED, atomic knowledge notes — one idea per atom, up to ${MAX_ATOMS}. Do NOT merge unrelated ideas; do NOT invent facts not present in the material. Each atom: a precise title, a one-paragraph "what", a one-paragraph "why it matters", 2-5 concrete "how to use" bullets, one "next action", and the subset of source URLs that support it (from: ${urls}; [] only if truly local/private).
 
-Return ONLY JSON matching the schema.
+Пиши значения JSON на русском языке. Return ONLY JSON matching the schema.
 
 ${fenceUntrusted('MATERIAL', text)}`
 }
@@ -562,7 +711,7 @@ function enrichPrompt(text, sources) {
 
 Known source hints: ${urls}.
 
-Produce: "enriched" = the expanded knowledge as clean prose (English ok; the human-readable Russian digest is a later stage), "sources" = all source URLs used, "added_facts" = short bullet list of what you added beyond the seed.
+Produce: "enriched" = the expanded knowledge as clean Russian prose, "sources" = all source URLs used, "added_facts" = short Russian bullet list of what you added beyond the seed.
 
 ${fenceUntrusted('MATERIAL', text)}`
 }
@@ -587,13 +736,13 @@ function atomFingerprint(atom, clusterId = '') {
 }
 
 function makeAtomNote(cluster, atom, verdict) {
-  const how = (atom.how || []).filter(Boolean).map(h => `- ${compact(h, 240)}`).join('\n') || '- Review and apply in context.'
+  const how = (atom.how || []).filter(Boolean).map(h => `- ${compact(h, 240)}`).join('\n') || '- Проверить и применить в контексте.'
   const sourceRefs = cluster.records.map(record => `- ${record.source_ref}`).join('\n')
-  const addedFacts = (cluster.enrichment?.addedFacts || []).map(f => `- ${compact(f, 300)}`).join('\n') || '- No external enrichment facts recorded.'
+  const addedFacts = (cluster.enrichment?.addedFacts || []).map(f => `- ${compact(f, 300)}`).join('\n') || '- Внешние факты не записаны.'
   const srcs = (atom.sources || []).filter(isPublicHttpUrl)
   const sourceLines = srcs.length
-    ? srcs.map(u => `- ${hostOf(u) || 'Source'}: ${u}`).join('\n')
-    : '- No public source detected; external verification required before operational adoption.'
+    ? srcs.map(u => `- ${hostOf(u) || 'Источник'}: ${u}`).join('\n')
+    : '- Публичный источник не найден; перед применением нужна внешняя проверка.'
   const fp = atomFingerprint(atom, cluster.id)
   const v = verdict || { status: 'unknown', note: '' }
   const isVerified = v.status === 'verified'
@@ -613,47 +762,47 @@ cluster_fingerprint: "${fp}"
 
 # ${compact(atom.title, 120)}
 
-## What This Is
+## Что это
 
 ${compact(atom.what, 1200)}
 
-## Why It Matters
+## Зачем это нужно
 
 ${compact(atom.why, 1200)}
 
-## How To Use It
+## Как использовать
 
 ${how}
 
-## Source
+## Источники
 
-Local source refs:
+Локальные source refs:
 ${sourceRefs}
 
-Public/source expansion:
+Публичные источники:
 ${sourceLines}
 
-## Enrichment
+## Расширение знания
 
-External facts added before atomization:
+Факты, добавленные до атомизации:
 ${addedFacts}
 
-## Verification
+## Проверка
 
-- Verification status: **${v.status}**${v.note ? ` (${v.note})` : ''}.
+- Статус проверки: **${v.status}**${v.note ? ` (${v.note})` : ''}.
 ${isVerified
-  ? `- A deep verify pass cross-checked the claim against the listed sources.${v.evidence ? ` Evidence: ${compact(v.evidence, 300)}` : ''}`
-  : '- **No claim-level fact-check confirmed this.** Source URLs are pointers, not confirmation. Promote to `verified` only after the deep verify gate (`--deep`) checks claims against the listed sources.'}
-- ${v.status === 'unknown' ? 'No source URL was anchored — treat as a local memory atom, not an externally verified claim.' : 'Confidence: medium until a human or deep verify confirms.'}
+  ? `- Утверждение сверено с указанными источниками.${v.evidence ? ` Подтверждение: ${compact(v.evidence, 300)}` : ''}`
+  : '- **Claim-level fact-check не подтвердил это.** URL - указатели, не доказательство. Статус `verified` допустим только после deep verify.'}
+- ${v.status === 'unknown' ? 'Нет source URL: это локальный memory atom, а не внешне подтверждённый claim.' : 'Уверенность: средняя, пока человек или deep verify не подтвердит вывод.'}
 
-## Related Notes
+## Связанные заметки
 
 - [[Mnemazine Protocol]]
-- [[${clusterTitle(cluster.id)}]]
+- [[${clusterTitleRu(cluster.id)}]]
 
-## Reuse
+## Следующее действие
 
-- Next action: ${compact(atom.next, 240) || 'Review and apply.'}
+- ${compact(atom.next, 240) || 'Проверить и применить по контексту.'}
 `
 }
 
@@ -698,12 +847,20 @@ async function processPart(part, parts, index) {
       let material
       if (ENRICH) {
         try {
-          const github = await enrichClusterFromGithub(part, sources)
-          const { enriched, addedSources, addedFacts } = github || await enrichCluster(part, sources)
+          const deterministic = await enrichClusterFromGithub(part, sources) || await enrichClusterFromSources(part, sources)
+          const { enriched, addedSources, addedFacts } = deterministic || await enrichCluster(part, sources)
           if (enriched && enriched.length > 200) {
             material = enriched
             for (const u of addedSources) if (!sources.some(s => s.url === u)) sources.push({ name: hostOf(u) || 'Source', url: u })
-            part.enrichment = { ok: true, addedFacts, addedSources, deterministic: Boolean(github), github: github?.github || null }
+            part.enrichment = {
+              ok: true,
+              addedFacts,
+              addedSources,
+              deterministic: Boolean(deterministic),
+              kind: deterministic?.github ? 'github' : deterministic ? 'sources' : 'llm',
+              github: deterministic?.github || null,
+              sourceFacts: deterministic?.sourceFacts || null
+            }
             enriched_clusters += 1
           }
         } catch (err) {
@@ -714,7 +871,7 @@ async function processPart(part, parts, index) {
         throw new Error(`strict enrichment failed for cluster ${part.id}: no expanded material with external facts/sources`)
       }
       const atoms = part.enrichment?.deterministic
-        ? atomsFromGithub(part, sources)
+        ? atomsFromDeterministic(part, sources)
         : await atomizeCluster(part, sources, material)
       let wroteAtom = false
       const allowedSourceUrls = new Set(sources.map(source => source.url).filter(isPublicHttpUrl))
@@ -723,7 +880,7 @@ async function processPart(part, parts, index) {
         const out = path.join(VAULT, '01 Concepts', `synthesis-${slugify(atom.title)}-${atomFingerprint(atom, part.id)}.md`)
         if (await fs.access(out).then(() => true).catch(() => false)) { skipped += 1; continue }
         const verdict = part.enrichment?.deterministic
-          ? { status: 'verified', checked: atom.sources || [], evidence: 'Fetched GitHub API/README/release for primary-source enrichment.', note: 'deterministic GitHub source check' }
+          ? { status: 'verified', checked: atom.sources || [], evidence: part.enrichment.kind === 'github' ? 'Fetched GitHub API/README/release for primary-source enrichment.' : 'Fetched public source pages from configured source hints.', note: `deterministic ${part.enrichment.kind} source check` }
           : DEEP
             ? await verifyDeep(`${atom.what}\n${atom.why}`, atom.sources)
             : verifyLocal(atom.sources)

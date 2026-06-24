@@ -3,9 +3,9 @@ import { promises as fs } from 'node:fs'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
-const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
 const INBOX = process.env.MNEMAZINE_INBOX || path.join(ROOT, 'inbox')
 const REPORTS = process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')
 const STATE = process.env.MNEMAZINE_STATE || path.join(ROOT, '.mnemazine/state')
@@ -21,9 +21,9 @@ const NEEDS_UPDATE_MAX_DAYS = Number(arg('needs-update-max-days', process.env.MN
 const STRICT_GRAPH = argv.includes('--strict-graph')
 const REQUIRE_DEEP = argv.includes('--require-deep') || process.env.MNEMAZINE_REQUIRE_DEEP === '1'
 
-function run(command, args) {
+function run(command, args, env = {}) {
   return new Promise(resolve => {
-    const child = spawn(command, args, { cwd: ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(command, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', chunk => { stdout += String(chunk) })
@@ -55,9 +55,10 @@ async function latestReport() {
   for (const item of await fs.readdir(REPORTS, { withFileTypes: true }).catch(() => [])) {
     if (!item.isFile() || !item.name.endsWith('.html')) continue
     const file = path.join(REPORTS, item.name)
-    reports.push({ file, mtimeMs: (await fs.stat(file)).mtimeMs })
+    reports.push({ file, name: item.name, mtimeMs: (await fs.stat(file)).mtimeMs })
   }
-  return reports.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.file || ''
+  const visual = reports.filter(item => item.name.includes('visual-knowledge-report'))
+  return (visual.length ? visual : reports).sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.file || ''
 }
 
 async function activeInboxFiles() {
@@ -68,6 +69,16 @@ async function activeInboxFiles() {
 
 async function readJson(file, fallback = null) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')) } catch { return fallback }
+}
+
+async function graphMtime(file) {
+  const stat = await fs.stat(file).catch(() => null)
+  return stat ? stat.mtimeMs : 0
+}
+
+function isGraphSemanticFile(file) {
+  return ['.md', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.heic', '.tiff', '.gif', '.svg']
+    .includes(path.extname(file).toLowerCase())
 }
 
 function deepFailures(lastRun) {
@@ -94,16 +105,18 @@ async function main() {
 
   const lastRunFile = path.join(STATE, 'last-run.json')
   const lastRun = await readJson(lastRunFile)
+  const VAULT = resolveVault({ cli: arg('vault'), env: process.env.MNEMAZINE_VAULT || lastRun?.vault })
+  const gateEnv = { MNEMAZINE_VAULT: VAULT }
   const lastRunStartedMs = lastRun?.started_at ? Date.parse(lastRun.started_at) : 0
-  const qualityArgs = ['scripts/mnemazine-vault-quality-gate.mjs', '--max-failures', '50']
+  const qualityArgs = ['scripts/mnemazine-vault-quality-gate.mjs', '--vault', VAULT, '--max-failures', '50']
   if (lastRunStartedMs) qualityArgs.push('--changed-since', lastRun.started_at)
-  const quality = await run(process.execPath, qualityArgs)
+  const quality = await run(process.execPath, qualityArgs, gateEnv)
   if (!quality.ok) failures.push(`vault quality failed: ${quality.stderr || quality.stdout}`)
 
   const report = await latestReport()
   if (!report) failures.push('weekly report missing')
   else {
-    const reportQuality = await run(process.execPath, ['scripts/mnemazine-report-quality-gate.mjs', '--report', report])
+    const reportQuality = await run(process.execPath, ['scripts/mnemazine-report-quality-gate.mjs', '--report', report], gateEnv)
     if (!reportQuality.ok) failures.push(`report quality failed: ${reportQuality.stderr || reportQuality.stdout}`)
   }
 
@@ -115,12 +128,26 @@ async function main() {
   if (!existsSync(brief)) failures.push('action brief missing')
   else if ((await fs.stat(brief)).mtimeMs < newestNote) failures.push('action brief older than newest vault note')
 
+  const humanLayerArgs = ['scripts/mnemazine-human-layer-gate.mjs', '--vault', VAULT]
+  if (lastRun?.started_at) humanLayerArgs.push('--changed-since', lastRun.started_at)
+  if (report) humanLayerArgs.push('--report', report)
+  const humanLayer = await run(process.execPath, humanLayerArgs, gateEnv)
+  if (!humanLayer.ok) failures.push(`human layer failed: ${humanLayer.stderr || humanLayer.stdout}`)
+
   const needsUpdate = path.join(VAULT, 'graphify-out', 'needs_update')
   if (existsSync(needsUpdate)) {
-    const ageDays = (Date.now() - (await fs.stat(needsUpdate)).mtimeMs) / 86400000
-    const msg = `semantic graph pending (${ageDays.toFixed(2)} days)`
-    if (STRICT_GRAPH || ageDays > NEEDS_UPDATE_MAX_DAYS) failures.push(msg)
-    else warnings.push(msg)
+    const graphPath = path.join(VAULT, 'graphify-out', 'graph.json')
+    const graphMs = await graphMtime(graphPath)
+    const newestSemantic = await newestChangedFileMtime(VAULT, 0, isGraphSemanticFile)
+    const staleMarker = graphMs && newestSemantic && graphMs >= newestSemantic
+    if (staleMarker) {
+      await fs.rm(needsUpdate, { force: true }).catch(() => {})
+    } else {
+      const ageDays = (Date.now() - (await fs.stat(needsUpdate)).mtimeMs) / 86400000
+      const msg = `semantic graph pending (${ageDays.toFixed(2)} days)`
+      if (STRICT_GRAPH || ageDays > NEEDS_UPDATE_MAX_DAYS) failures.push(msg)
+      else warnings.push(msg)
+    }
   }
 
   if (REQUIRE_DEEP) {

@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -21,7 +22,7 @@ function arg(name, fallback = '') {
   return hit.includes('=') ? hit.split('=').slice(1).join('=') : argv[argv.indexOf(hit) + 1] || fallback
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 // Default state dir matches README:224 (~/Desktop/Mnemazine/.mnemazine/state),
 // the canonical pickup for the weekly-brief export. Override with MNEMAZINE_STATE
 // / --state-dir, or point --state straight at the downloaded file.

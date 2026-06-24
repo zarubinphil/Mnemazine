@@ -53,6 +53,8 @@ async function listFiles(dir) {
 async function checkSyntax() {
   const scripts = [
     'scripts/mnemazine-run.mjs',
+    'scripts/mnemazine-paths.mjs',
+    'scripts/mnemazine-doctor.mjs',
     'scripts/mnemazine-vault-quality-gate.mjs',
     'scripts/mnemazine-refresh-graphify.mjs',
     'scripts/mnemazine-refresh-graphify-smoke.mjs',
@@ -69,7 +71,9 @@ async function checkSyntax() {
     'scripts/mnemazine-weekly-state.mjs',
     'scripts/mnemazine-postrun-knowledge-report.mjs',
     'scripts/mnemazine-digest.mjs',
+    'scripts/mnemazine-tool-decision-queue.mjs',
     'scripts/mnemazine-report-quality-gate.mjs',
+    'scripts/mnemazine-human-layer-gate.mjs',
     'scripts/mnemazine-complete-check.mjs',
     'scripts/mnemazine-live-status.mjs',
     'scripts/mnemazine-release-check.mjs'
@@ -164,6 +168,7 @@ async function demoSmoke() {
   await fs.mkdir(scripts, { recursive: true })
   await fs.copyFile(path.join(ROOT, 'demo/inbox/example-guide.md'), path.join(inbox, 'example-guide.md'))
   await fs.writeFile(path.join(inbox, 'empty-source.bin'), '')
+  await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-paths.mjs'), path.join(scripts, 'mnemazine-paths.mjs'))
   await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs'), path.join(scripts, 'mnemazine-vault-quality-gate.mjs'))
   await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-synthesize.mjs'), path.join(scripts, 'mnemazine-synthesize.mjs'))
   await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-llm.mjs'), path.join(scripts, 'mnemazine-llm.mjs'))
@@ -231,7 +236,12 @@ async function strictArchiveGateSmoke() {
     await fs.mkdir(path.join(vault, '01 Concepts'), { recursive: true })
     await fs.mkdir(scripts, { recursive: true })
     await fs.mkdir(extracts, { recursive: true })
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-paths.mjs'), path.join(scripts, 'mnemazine-paths.mjs'))
     await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-vault-quality-gate.mjs'), path.join(scripts, 'mnemazine-vault-quality-gate.mjs'))
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-digest.mjs'), path.join(scripts, 'mnemazine-digest.mjs'))
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-human-layer-gate.mjs'), path.join(scripts, 'mnemazine-human-layer-gate.mjs'))
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-llm.mjs'), path.join(scripts, 'mnemazine-llm.mjs'))
+    await fs.copyFile(path.join(ROOT, 'scripts/mnemazine-codex.mjs'), path.join(scripts, 'mnemazine-codex.mjs'))
 
     const source = 'MarkItDown converts Office/PDF/image inputs into Markdown for LLM pipelines. This cached source has enough text for synthesis.'
     const hash = sha256Text(source)
@@ -295,13 +305,19 @@ status: "final"
 enrichment: "external-research"
 ---
 
-# Verified enriched cached note
+# Проверенная cached note
 
-## What This Is
+## Что это
 
-MarkItDown is verified here as reusable knowledge, not raw OCR.
+MarkItDown здесь зафиксирован как проверенное переиспользуемое знание, а не голый распознанный текст.
 
-## Source
+## Как использовать
+
+- Держать source refs как доказательство происхождения.
+- Проверять публичный репозиторий перед рекомендацией.
+- Архивировать исходник только после verified final note.
+
+## Источники
 
 Local source refs:
 - ${ref}
@@ -309,11 +325,20 @@ Local source refs:
 Public/source expansion:
 - Microsoft MarkItDown: https://github.com/microsoft/markitdown
 
-## Enrichment
+## Расширение знания
 
 External facts added before atomization:
 - Microsoft maintains MarkItDown as an open-source file-to-Markdown converter.
 - The public repository documents optional extras for additional input formats.
+
+## Проверка
+
+- Статус: verified.
+- Источник сверяется с публичным GitHub URL.
+
+## Следующее действие
+
+- Держать эту ноту как smoke fixture для strict archive gate.
 `)
   await must('strict archive gate smoke:good', process.execPath, ['scripts/mnemazine-run.mjs'], {
     env: {
@@ -336,9 +361,60 @@ async function qualityAndPublicChecks() {
   await must('weekly state selftest', process.execPath, ['scripts/mnemazine-weekly-state.mjs', '--selftest'])
   await must('live status selftest', process.execPath, ['scripts/mnemazine-live-status.mjs', '--selftest'])
   await must('demo vault quality', 'npm', ['run', 'quality', '--', '--vault', 'demo/vault'])
+  await toolDecisionQueueSmoke()
   await reportQualityGateSmoke()
+  await humanLayerGateSmoke()
   await completeGateSmoke()
   await must('public release scan', 'npm', ['run', 'public-check'])
+}
+
+async function toolDecisionQueueSmoke() {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-tool-queue-'))
+  const vault = path.join(temp, 'vault')
+  const concepts = path.join(vault, '01 Concepts')
+  await fs.mkdir(concepts, { recursive: true })
+  const started = new Date(Date.now() - 1000).toISOString()
+  await fs.writeFile(path.join(concepts, 'aider.md'), `---
+title: "Aider-AI/aider: решение для Mnemazine"
+type: "knowledge-note"
+verified: true
+verification_status: "verified"
+status: "final"
+---
+
+# Aider-AI/aider: решение для Mnemazine
+
+## Что это
+
+CLI-инструмент для разработки с LLM внутри локального git-репозитория.
+
+## Решение
+
+Хранить как кандидата в рабочие возможности, не устанавливать автоматически.
+
+## Что добавила Mnemazine
+
+- Метаданные GitHub: 1 звезда, 1 форк, 1 issue, MIT, основной язык Python.
+- Свежесть репозитория: основная ветка main, последний push 2026-06-24, последний release v1.
+
+## Источники
+
+- https://github.com/Aider-AI/aider
+
+## Проверка
+
+- Статус: verified.
+
+## Следующее действие
+
+- Добавить в очередь разбора возможностей.
+`, 'utf8')
+  await must('tool decision queue smoke', process.execPath, ['scripts/mnemazine-tool-decision-queue.mjs', '--vault', vault, '--changed-since', started])
+  const out = path.join(vault, '08 AI и Инструменты/Tools/Очередь разбора инструментов.md')
+  const body = await fs.readFile(out, 'utf8')
+  for (const token of ['# Очередь разбора инструментов', 'Aider', 'Пробный запуск', 'берём, откладываем, забываем']) {
+    if (!body.includes(token)) throw new Error(`tool queue smoke failed: missing ${token}`)
+  }
 }
 
 async function completeGateSmoke() {
@@ -352,8 +428,9 @@ async function completeGateSmoke() {
   await fs.writeFile(path.join(reports, 'complete-smoke.html'), [
     '<!doctype html><html><body>',
     '<main data-knowledge-atom="complete-smoke">',
-    '<h1>Синтезированные знания</h1>',
-    '<section><h2>Синтез</h2><p>Проверенная идея после обработки.</p></section>',
+    '<h1>Отчёт Mnemazine после прогона</h1>',
+    '<section><h2>Новые и обновленные знания</h2><p>Свежий слой знаний на русском языке: понятно, что обработано, что проверено и какой следующий шаг нужен человеку.</p></section>',
+    '<section><h2>Синтез</h2><p>Проверенная идея после обработки превращена в короткий вывод, а не оставлена как сырой захват.</p></section>',
     '<section><h2>Источники</h2>',
     '<a href="https://example.com/source-a">source a</a>',
     '<a href="https://example.com/source-b">source b</a>',
@@ -363,7 +440,25 @@ async function completeGateSmoke() {
     '<section><h2>Следующее действие</h2><p>Запустить gate.</p></section>',
     '</main></body></html>'
   ].join(''), 'utf8')
-  await fs.writeFile(path.join(state, 'last-action-brief.md'), '# Complete Gate Smoke\n\n- Next action: keep release gate green.\n', 'utf8')
+  await fs.writeFile(path.join(state, 'last-action-brief.md'), [
+    '# Короткий отчёт Mnemazine — smoke',
+    '',
+    '## Статус',
+    '',
+    '- Inbox: 0',
+    '- Гейт качества: ok',
+    '',
+    '## Следующие действия',
+    '',
+    '- Держать release gate зелёным.'
+  ].join('\n'), 'utf8')
+  await fs.writeFile(path.join(state, 'last-run.json'), JSON.stringify({
+    ok: true,
+    started_at: new Date().toISOString(),
+    deep: false,
+    processed: 0,
+    synthesize: { skipped: true }
+  }, null, 2), 'utf8')
   await must('complete gate smoke', process.execPath, ['scripts/mnemazine-complete-check.mjs'], {
     env: {
       MNEMAZINE_VAULT: path.join(ROOT, 'demo/vault'),
@@ -402,6 +497,94 @@ async function reportQualityGateSmoke() {
   if (rawResult.code === 0) throw new Error('report gate smoke failed: raw OCR report passed')
 
   await must('report quality gate smoke:good', process.execPath, ['scripts/mnemazine-report-quality-gate.mjs', '--report', good])
+}
+
+async function humanLayerGateSmoke() {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'mnemazine-human-layer-'))
+  const vault = path.join(temp, 'vault')
+  const reports = path.join(temp, 'reports')
+  const state = path.join(temp, 'state')
+  const concepts = path.join(vault, '01 Concepts')
+  await fs.mkdir(concepts, { recursive: true })
+  await fs.mkdir(reports, { recursive: true })
+  await fs.mkdir(state, { recursive: true })
+  const started = new Date(Date.now() - 1000).toISOString()
+  await fs.writeFile(path.join(concepts, 'good.md'), `---
+title: "Хорошая русская заметка"
+type: "knowledge-note"
+status: "final"
+verified: true
+verification_status: "verified"
+---
+
+# Хорошая русская заметка
+
+## Что это
+
+Это проверенное знание: оно объясняет смысл, применение, источник и следующий шаг обычным русским языком.
+
+## Как использовать
+
+- Читать вывод, а не сырой захват.
+- Проверять источник перед применением.
+- Превращать вывод в маленькое действие.
+
+## Источники
+
+- local-media:humanlayersmoke
+- https://example.com/source
+
+## Проверка
+
+- Статус: verified.
+- Сырой HTML исключён из финального слоя.
+
+## Следующее действие
+
+- Оставить human-layer gate в release-check.
+`, 'utf8')
+  const report = path.join(reports, 'good.html')
+  await fs.writeFile(report, [
+    '<!doctype html><html><body>',
+    '<h1>Отчёт Mnemazine после прогона</h1>',
+    '<section><h2>Новые и обновленные знания</h2><p>Понятная сводка объясняет, что появилось, зачем это нужно, где источник и какое действие взять следующим шагом.</p></section>',
+    '<section><h2>Проверка и риск</h2><p>Сырой HTML исключён из пользовательского текста, а непроверенные утверждения остаются помеченными до ручной проверки.</p></section>',
+    '<section><h2>Следующее действие</h2><p>Запустить gate и убедиться, что отчёт читается человеком без знания внутреннего пайплайна.</p></section>',
+    '</body></html>'
+  ].join(''), 'utf8')
+  await fs.writeFile(path.join(state, 'last-action-brief.md'), [
+    '# Короткий отчёт Mnemazine — smoke',
+    '',
+    '## Статус',
+    '',
+    '- Inbox: 0',
+    '',
+    '## Следующие действия',
+    '',
+    '- Проверить human-layer gate.'
+  ].join('\n'), 'utf8')
+  await must('human layer gate smoke:good', process.execPath, ['scripts/mnemazine-human-layer-gate.mjs', '--changed-since', started, '--report', report], {
+    env: {
+      MNEMAZINE_VAULT: vault,
+      MNEMAZINE_REPORTS: reports,
+      MNEMAZINE_STATE: state
+    }
+  })
+
+  await fs.writeFile(path.join(concepts, 'bad.md'), `# Bad note
+
+## What This Is
+
+README signal: src="https://example.com/badge.svg"
+`, 'utf8')
+  const bad = await run(process.execPath, ['scripts/mnemazine-human-layer-gate.mjs', '--changed-since', started, '--report', report], {
+    env: {
+      MNEMAZINE_VAULT: vault,
+      MNEMAZINE_REPORTS: reports,
+      MNEMAZINE_STATE: state
+    }
+  })
+  if (bad.code === 0) throw new Error('human layer gate smoke failed: bad note passed')
 }
 
 async function searchEvalSmoke() {

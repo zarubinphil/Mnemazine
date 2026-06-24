@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
-const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
+const VAULT = resolveVault()
 const REPORTS = process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')
 const STATE = process.env.MNEMAZINE_STATE || path.join(ROOT, '.mnemazine/state')
 

@@ -17,17 +17,31 @@ function flag(name) {
   return argv.includes(`--${name}`)
 }
 
-const REPO_VAULT = path.join(ROOT, 'vault')
+function lastRunVault() {
+  const file = path.join(ROOT, '.mnemazine/state/last-run.json')
+  try {
+    const state = JSON.parse(fsSync.readFileSync(file, 'utf8'))
+    return state?.vault || ''
+  } catch {
+    return ''
+  }
+}
 const VAULT = resolveVault({
-  cli: arg('vault', process.env.MNEMAZINE_VAULT || (fsSync.existsSync(REPO_VAULT) ? REPO_VAULT : '')),
+  cli: arg('vault', process.env.MNEMAZINE_VAULT || lastRunVault()),
 })
 const REPORTS = path.resolve(arg('reports', process.env.MNEMAZINE_REPORTS || path.join(ROOT, 'reports')))
 const RUN_ID = arg('run-id', new Date().toISOString().slice(0, 10))
-const TITLE = arg('title', 'Mnemazine knowledge brief')
+const TITLE = arg('title', 'Отчёт Mnemazine по знаниям')
 const LOGS = arg('logs', '')
 const RESULTS_JSON = arg('results-json', '')
 const FINAL_FILES_JSON = arg('final-files-json', '')
 const SINCE_DAYS = Number(arg('since-days', process.env.MNEMAZINE_POSTRUN_SINCE_DAYS || '7'))
+function lastRunState() {
+  const file = path.join(ROOT, '.mnemazine/state/last-run.json')
+  try { return JSON.parse(fsSync.readFileSync(file, 'utf8')) } catch { return null }
+}
+const LAST_RUN = lastRunState()
+const CHANGED_SINCE = arg('changed-since', LAST_RUN?.started_at || '')
 
 const DEFAULT_LOGS = (process.env.MNEMAZINE_POSTRUN_LOGS || '')
   .split(',')
@@ -56,9 +70,37 @@ function clean(text) {
 
 function present(text) {
   return String(text || '')
+    .replace(/\bcandidate capability\b/gi, 'кандидат в рабочие возможности')
+    .replace(/\bcapability review queue\b/gi, 'очередь разбора возможностей')
+    .replace(/\bworkflow-fit\b/gi, 'пригодность для конкретного сценария')
+    .replace(/\bworkflow\b/gi, 'рабочий сценарий')
+    .replace(/с одним реальным рабочий сценарий/gi, 'с одним реальным рабочим сценарием')
+    .replace(/если пригодность для конкретного сценария конкретный/gi, 'если есть понятная пригодность для конкретного сценария')
+    .replace(/с одним критерием принять\/отклонить/gi, 'с одним критерием: принять или отклонить')
+    .replace(/Перед пробный запуск проверить/gi, 'Перед пробным запуском проверить')
+    .replace(/режим только чтение режим/gi, 'режим только чтения')
+    .replace(/список разрешённых доменов доменов/gi, 'список разрешённых доменов')
+    .replace(/web-рабочий сценарий/gi, 'браузерный сценарий')
+    .replace(/черновик короткое видео/gi, 'черновик короткого видео')
+    .replace(/\bfit под конкретный рабочий сценарий\b/gi, 'пригодность к конкретному рабочему сценарию')
+    .replace(/\blocal trial\b/gi, 'локальный пробный запуск')
+    .replace(/\btrial\b/gi, 'пробный запуск')
+    .replace(/\breview diff\b/gi, 'проверку изменений кода')
+    .replace(/\bweb-workflow\b/gi, 'браузерный сценарий')
+    .replace(/\bshort-form video\b/gi, 'короткое видео')
+    .replace(/\bhook\/CTA\b/gi, 'крючок и призыв к действию')
+    .replace(/\bread-only\b/gi, 'режим только чтение')
+    .replace(/\ballowlist\b/gi, 'список разрешённых доменов')
+    .replace(/\bregistry\/ledger\b/gi, 'реестр и журнал')
+    .replace(/\s+(?:src|href|alt|title)=["'][^"']*["']/gi, '')
+    .replace(/\b(?:src|href|alt|title)=["'][^"']*["']/gi, '')
+    .replace(/<[^>]+>/g, ' ')
     .replace(/\bIMG_\d+(?:\.(?:WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4))?\b/gi, 'локальный визуальный источник')
     .replace(/\btemp_image[_-][\w.-]+/gi, 'локальный визуальный источник')
     .replace(/\b[\w.-]+\.(?:WEBP|PNG|JPE?G|HEIC|TIFF|MOV|MP4)\b/gi, 'локальный медиафайл')
+    .replace(/\bDESIGN\.md\b/gi, 'дизайн-контракт')
+    .replace(/\b(?!getdesign\.md\b)[\w.-]+\.md\b/gi, 'локальная заметка')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
@@ -75,7 +117,7 @@ function titleOf(text, file) {
 
 function extractSection(text, names) {
   for (const name of names) {
-    const re = new RegExp(`^##\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+|\\z)`, 'mi')
+    const re = new RegExp(`^##\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, 'mi')
     const hit = text.match(re)
     if (hit) return clean(hit[1])
   }
@@ -137,15 +179,22 @@ async function loadResults() {
       if (obj) rows.push(obj)
     }
   }
-  if (!rows.length) rows.push(...await loadRecentVaultResults(SINCE_DAYS))
+  if (!rows.length) rows.push(...await loadRecentVaultResults(SINCE_DAYS, CHANGED_SINCE))
   const byGroup = new Map()
   for (const row of rows) byGroup.set(row.group_id, row)
   return [...byGroup.values()]
 }
 
-async function loadRecentVaultResults(days) {
+function sinceMs(value) {
+  if (!value) return 0
+  if (/^\d+(?:\.\d+)?$/.test(String(value))) return Number(value)
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+async function loadRecentVaultResults(days, changedSince = '') {
   const files = await walk(VAULT)
-  const cutoff = Date.now() - Math.max(1, Number(days) || 7) * 24 * 60 * 60 * 1000
+  const cutoff = sinceMs(changedSince) || (Date.now() - Math.max(1, Number(days) || 7) * 24 * 60 * 60 * 1000)
   const rows = []
   for (const file of files) {
     const stat = await fs.stat(file).catch(() => null)
@@ -213,8 +262,8 @@ function clusterOf(record) {
   if (text.includes('investor') || text.includes('cap table') || text.includes('esop') || text.includes('founder') || text.includes('shareholder')) return 'Investor-ready startup'
   if (text.includes('agent') || text.includes('codex') || text.includes('claude') || text.includes('mnemazine') || text.includes('graph')) return 'Agent OS'
   if (text.includes('quick wins') || text.includes('support') || text.includes('sales') || text.includes('onboarding')) return 'AI business offers'
-  if (text.includes('prompt') || text.includes('промпт') || text.includes('slash')) return 'Prompts / commands'
-  return 'Other useful knowledge'
+  if (text.includes('prompt') || text.includes('промпт') || text.includes('slash')) return 'Промпты и команды'
+  return 'Прочие полезные знания'
 }
 
 async function buildRecords(results) {
@@ -246,9 +295,9 @@ async function buildRecords(results) {
       const text = await fs.readFile(noteFile, 'utf8')
       record.title ||= titleOf(text, noteFile)
       record.section ||= sectionOf(noteFile)
-      record.summary ||= firstPara(extractSection(text, ['Короткий ответ', 'Что это и зачем', 'Что это', 'Суть', 'Полное объяснение', 'What This Is']), 430)
-      record.helps ||= firstPara(extractSection(text, ['Как поможет мне', '🎯 Как поможет мне', 'Как это поможет мне', 'Зачем мне']), 340)
-      record.next ||= firstPara(extractSection(text, ['Следующий ход', 'Следующее действие', 'Next Action']), 260)
+      record.summary ||= firstPara(extractSection(text, ['Короткий ответ', 'Что это и зачем', 'Что это', 'Что обещает README', 'Риск', 'Решение', 'Суть', 'Полное объяснение', 'What This Is']), 430)
+      record.helps ||= firstPara(extractSection(text, ['Как использовать', 'Как поможет мне', '🎯 Как поможет мне', 'Как это поможет мне', 'Зачем мне', 'Что добавила Mnemazine']), 340)
+      record.next ||= firstPara(extractSection(text, ['Следующий ход', 'Следующее действие', 'Next Action']), 260).replace(/^[-*]\s*/, '')
       record.atoms = record.atoms.length ? record.atoms : splitAtoms(text)
     } else {
       record.title ||= raw ? firstPara(raw, 100) : result.group_id
@@ -270,12 +319,13 @@ async function buildRecords(results) {
 }
 
 function outcomeLabel(record) {
-  return Object.entries(record.outcomes).map(([k, v]) => `${k}:${v}`).join(', ')
+  const names = { note: 'заметка', atoms: 'атомы', dup: 'дубль' }
+  return Object.entries(record.outcomes).map(([k, v]) => `${names[k] || k}:${v}`).join(', ')
 }
 
 function noteLink(record) {
   if (!record.file) return '—'
-  return `[${present(path.basename(record.file, '.md')) || 'Локальное знание'}](${record.file})`
+  return `[${present(record.title) || 'Локальное знание'}](${record.file})`
 }
 
 function top20(records) {
@@ -351,7 +401,7 @@ function graphSvg(modules) {
 
 function mermaid(records) {
   const clusters = groupByCluster(records.filter(r => r.outcomes.note || r.outcomes.atoms))
-  const lines = ['mindmap', '  root((Mnemazine batch))']
+  const lines = ['mindmap', '  root((Прогон Mnemazine))']
   for (const [cluster, items] of clusters) {
     lines.push(`    ${cluster.replace(/[()]/g, '')}`)
     for (const item of items.slice(0, 8)) {
@@ -373,9 +423,9 @@ function markdown({ records, results, mdPath, htmlPath }) {
   const dupRows = dup
     .sort((a, b) => b.files - a.files)
     .map(r => `| ${mdEsc(r.cluster)} | ${r.files} | ${noteLink(r)} | ${mdEsc(r.summary || r.title)} |`)
-  return `# Mnemazine visual knowledge report
+  return `# Отчёт Mnemazine по знаниям
 
-Run: ${RUN_ID}  
+Прогон: ${RUN_ID}
 HTML: ${htmlPath}
 
 ## Сводка
@@ -450,7 +500,7 @@ main{padding:20px max(16px,4.5vw) 64px}.minute{display:grid;grid-template-column
 <body>
 <header class="hero">
   <div>
-    <div class="eyebrow">Mnemazine post-run knowledge report</div>
+    <div class="eyebrow">Отчёт Mnemazine после прогона</div>
     <h1>Минутная карта знаний</h1>
     <p class="lead">Сначала модули и атомы, потом действия. Подробный текст спрятан ниже, чтобы быстро понять, что появилось и зачем это нужно.</p>
     <div class="stats">
@@ -466,7 +516,7 @@ main{padding:20px max(16px,4.5vw) 64px}.minute{display:grid;grid-template-column
     <div class="panel">
       <h2>Блок-схема</h2>
       ${graphSvg(topModules)}
-      <p>Синтез: источники и проверка сведены в модули. Применение видно через действия, риск — через дубли, неизвестные и слабые извлечения.</p>
+      <p>Синтез: источники и проверка сведены в модули. Применение видно через действия, риск - через дубли, неизвестные и слабые извлечения.</p>
       <p><a href="#modules">Источники</a> · <a href="#actions">Где применить</a> · <a href="#details">Проверка и риск</a></p>
     </div>
     <div class="panel" id="actions">
@@ -482,9 +532,9 @@ main{padding:20px max(16px,4.5vw) 64px}.minute{display:grid;grid-template-column
       <section class="section-title"><h2>Топ-20 к действию</h2><p>Полный рекомендуемый порядок.</p></section>
       <section class="cards">${actions.map((item, i) => `<article class="card"><div class="meta"><span class="tag">#${i + 1}</span><span class="tag">${esc(item.cluster)}</span></div><h3>${esc(item.title)}</h3><p>${esc(item.next)}</p></article>`).join('')}</section>
       <section class="section-title"><h2>Новые и обновленные знания</h2><p>Архивная часть отчёта.</p></section>
-      <section class="cards">${fresh.sort((a, b) => b.score - a.score).map(item => `<article class="card"><div class="meta"><span class="tag">${esc(item.cluster)}</span><span class="tag">${esc(outcomeLabel(item))}</span><span class="tag">${item.files} files</span></div><h3>${item.file ? `<a href="file://${esc(item.file)}">${esc(item.title)}</a>` : esc(item.title)}</h3><p>${esc(brief(item.summary || 'Описание не найдено, смотри ноту.', 180))}</p><p><strong>Как полезно:</strong> ${esc(brief(item.helps || 'Привязать к ближайшему проекту.', 160))}</p></article>`).join('')}</section>
+      <section class="cards">${fresh.sort((a, b) => b.score - a.score).map(item => `<article class="card"><div class="meta"><span class="tag">${esc(item.cluster)}</span><span class="tag">${esc(outcomeLabel(item))}</span><span class="tag">${item.files} файлов</span></div><h3>${item.file ? `<a href="file://${esc(item.file)}">${esc(item.title)}</a>` : esc(item.title)}</h3><p>${esc(brief(item.summary || 'Описание не найдено, смотри ноту.', 180))}</p><p><strong>Как полезно:</strong> ${esc(brief(item.helps || 'Привязать к ближайшему проекту.', 160))}</p></article>`).join('')}</section>
       <section class="section-title"><h2>Дубли без потерь</h2><p>Материалы, которые подтвердили уже существующие знания.</p></section>
-      <section class="dups">${dup.sort((a, b) => b.files - a.files).map(item => `<article class="dup"><b>${esc(item.title)}</b><span>${esc(item.cluster)} · ${item.files} files · ${esc(outcomeLabel(item))}</span></article>`).join('')}</section>
+      <section class="dups">${dup.sort((a, b) => b.files - a.files).map(item => `<article class="dup"><b>${esc(item.title)}</b><span>${esc(item.cluster)} · ${item.files} файлов · ${esc(outcomeLabel(item))}</span></article>`).join('')}</section>
     </div>
   </details>
 </main>

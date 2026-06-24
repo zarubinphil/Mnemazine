@@ -1,6 +1,6 @@
 # Mnemazine Agent Commands
 
-This repository has two chat commands. Treat them as commands, not as topics to discuss.
+This repository has three chat commands. Treat them as commands, not as topics to discuss.
 
 ## `Mnemazine`
 
@@ -21,6 +21,16 @@ npm run update
 ```
 
 This updates code from GitHub, preserves local config, reinstalls wrappers, and syntax-checks scripts. It must not process inbox files.
+
+## `Mnemazine doctor`
+
+When the latest user message is `Mnemazine doctor`, `Мнемозина doctor`, `проверь Mnemazine`, or `проверь Мнемозину`:
+
+```bash
+npm run doctor
+```
+
+This checks the last run, live vault gates, graph markers, release smoke, and inbox state. It must not process inbox files.
 
 ## Failure Rule
 

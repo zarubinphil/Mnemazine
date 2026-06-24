@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
-const VAULT = process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')
 const argv = process.argv.slice(2)
 
 function arg(name, fallback = '') {
@@ -16,6 +16,7 @@ const seed = arg('url')
 const apply = argv.includes('--apply')
 const graphify = argv.includes('--graphify')
 const maxPages = Number(arg('max-pages', '40'))
+const VAULT = resolveVault({ cli: arg('vault') })
 
 if (!seed) {
   console.error('Usage: node scripts/mnemazine-ingest-site.mjs --url https://example.com [--apply] [--graphify] [--max-pages 40]')

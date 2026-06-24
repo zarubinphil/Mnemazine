@@ -5,6 +5,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { readGraph, writeGraph, mergeGraphObjects, graphStats } from './mnemazine-graph-utils.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const CONFIG_PATH = path.join(ROOT, 'config', 'graphify-refresh.json')
@@ -21,7 +22,7 @@ function flag(name) {
   return argv.includes(`--${name}`)
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 const GRAPH = path.resolve(arg('graph', path.join(VAULT, 'graphify-out/graph.json')))
 const BACKEND = arg('backend', process.env.MNEMAZINE_GRAPHIFY_BACKEND || CONFIG.backend || 'ollama')
 const MODEL = arg('model', process.env.MNEMAZINE_GRAPHIFY_MODEL || CONFIG.model || 'qwen2.5-coder:7b')

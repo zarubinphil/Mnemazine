@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { readGraph, writeGraph, mergeGraphObjects, graphStats } from './mnemazine-graph-utils.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const argv = process.argv.slice(2)
 
@@ -46,7 +47,7 @@ function withoutSourceFiles(graph, files) {
 }
 
 async function main() {
-  const vault = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(process.cwd(), 'vault')))
+  const vault = resolveVault({ cli: arg('vault') })
   const graphPath = path.resolve(arg('graph', path.join(vault, 'graphify-out/graph.json')))
   const shardsDir = path.resolve(arg('shards-dir', path.join(vault, '.mnemazine/semantic-shards')))
   const manifestPath = arg('manifest', '')

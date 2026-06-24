@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -12,7 +13,7 @@ function arg(name, fallback = '') {
   return hit.includes('=') ? hit.split('=').slice(1).join('=') : argv[argv.indexOf(hit) + 1] || fallback
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 const REQUIRE_DOSSIER = argv.includes('--require-dossier')
 const CHANGED_SINCE = arg('changed-since', '')
 const MAX_FAILURES = Number(arg('max-failures', process.env.MNEMAZINE_QUALITY_MAX_FAILURES || '0'))

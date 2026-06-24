@@ -188,6 +188,21 @@ npm run last-run -- --require-ok
 npm run complete -- --require-deep
 ```
 
+Agent chat health check:
+
+```text
+Mnemazine doctor
+```
+
+Terminal equivalent:
+
+```bash
+npm run doctor
+```
+
+This does not process inbox files. It checks the last run, completion gate,
+human layer, release smoke, graph markers, and inbox state.
+
 If a strict run fails before archive, that is safe: source files stay in the
 inbox. Do not move or delete them by hand. Read
 `npm run last-run`, fix the cause, and run again.

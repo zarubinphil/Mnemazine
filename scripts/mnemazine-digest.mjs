@@ -5,11 +5,12 @@
 // graph. Plus one session summary note mapping all processed atoms — so the
 // knowledge is trivially reusable later.
 //   node scripts/mnemazine-digest.mjs --vault <path> [--provider claude|codex] [--force]
-// Needs an LLM (Claude primary). No-op for notes already carrying a Справка
+// Needs an LLM (Codex default). No-op for notes already carrying a Справка
 // unless --force. Default pipeline never calls this — it is a deep/opt-in stage.
 import { promises as fs, readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import { llmAvailable, llmJson, fenceUntrusted } from './mnemazine-llm.mjs'
+import { activeProvider, llmAvailable, llmJson, fenceUntrusted } from './mnemazine-llm.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const ROOT = process.env.MNEMAZINE_ROOT || path.resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -19,9 +20,9 @@ function arg(name, fb = '') {
   return hit.includes('=') ? hit.split('=').slice(1).join('=') : argv[argv.indexOf(hit) + 1] || fb
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 const SESSION = arg('session', new Date().toISOString().slice(0, 10))
-const PROVIDER = arg('provider', process.env.MNEMAZINE_LLM || 'claude')
+const PROVIDER = arg('provider', process.env.MNEMAZINE_LLM || activeProvider())
 const FORCE = argv.includes('--force')
 const DETERMINISTIC = argv.includes('--deterministic') || process.env.MNEMAZINE_DIGEST_DETERMINISTIC === '1'
 const LIMIT = Number(arg('limit', '0')) // 0 = no cap
@@ -141,9 +142,9 @@ function extractSection(text, names) {
 
 function deterministicDigest(noteText, file) {
   const title = titleOf(noteText, file)
-  const what = extractSection(noteText, ['What This Is', 'Что это', 'Суть'])
-  const why = extractSection(noteText, ['Why It Matters', 'Почему важно'])
-  const how = extractSection(noteText, ['How To Use It', 'Как использовать', 'Reuse'])
+  const what = extractSection(noteText, ['Что это', 'Суть', 'What This Is'])
+  const why = extractSection(noteText, ['Зачем это нужно', 'Почему важно', 'Why It Matters'])
+  const how = extractSection(noteText, ['Как использовать', 'Что добавила Mnemazine', 'Reuse', 'How To Use It'])
   return {
     zagolovok: title,
     chto_eto: what || `Проверенная заметка по теме "${title}".`,
@@ -207,13 +208,13 @@ async function main() {
     const body = [
       `---\ntitle: "Сводка знаний — ${SESSION}"\ntype: "knowledge-digest"\nsource_ref: "digest:${SESSION}"\n---`,
       `\n# Сводка знаний — ${SESSION}\n`,
-      `## What This Is\n\nСводка связывает новые knowledge-note после digest-прогона и показывает, какие заметки теперь имеют человеческую справку.\n`,
-      `## Why It Matters\n\nЭто финальный reuse-слой: после intake знание видно не только как отдельные файлы, но и как карта применимых связей.\n`,
-      `## How To Use It\n\n- Открыть связанные заметки из списка ниже.\n- Взять сильные next actions в работу.\n- Проверить слабые или неподтверждённые связи перед публикацией.\n`,
-      `## Source\n\n- source_ref: digest:${SESSION}\n- processed_notes: ${summary.length}\n`,
-      `## Verification\n\nСводка построена локально из заметок vault и связей digest-этапа. Не является внешней факт-проверкой.\n`,
-      `## Related Notes\n\n- [[Mnemazine Protocol]]\n`,
-      `## Reuse\n\nОбработано заметок: ${summary.length}. Ниже — что узнано и как связано.\n`,
+      `## Что это\n\nСводка связывает новые knowledge-note после digest-прогона и показывает, какие заметки теперь имеют человеческую справку.\n`,
+      `## Зачем это нужно\n\nЭто финальный reuse-слой: после intake знание видно не только как отдельные файлы, но и как карта применимых связей.\n`,
+      `## Как использовать\n\n- Открыть связанные заметки из списка ниже.\n- Взять сильные next actions в работу.\n- Проверить слабые или неподтверждённые связи перед публикацией.\n`,
+      `## Источник\n\n- source_ref: digest:${SESSION}\n- processed_notes: ${summary.length}\n`,
+      `## Проверка\n\nСводка построена локально из заметок vault и связей digest-этапа. Не является внешней факт-проверкой.\n`,
+      `## Связанные заметки\n\n- [[Mnemazine Protocol]]\n`,
+      `## Повторное использование\n\nОбработано заметок: ${summary.length}. Ниже — что узнано и как связано.\n`,
       ...summary.map(s => `## ${s.zagolovok}\n\n- Заметка: [[${s.rel.replace(/\.md$/, '')}]]\n- Связи: ${s.connections.length ? s.connections.map(c => `[[${c.replace(/\.md$/, '')}]]`).join(', ') : '—'}\n`)
     ].join('\n')
     await fs.writeFile(path.join(dir, `Сводка-${SESSION}.md`), body, 'utf8')

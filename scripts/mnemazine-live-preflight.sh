@@ -35,9 +35,16 @@ fi
 if [ "${MNEMAZINE_PREFLIGHT_SKIP_LLM:-0}" != "1" ]; then
   provider_hint="${MNEMAZINE_LLM:-}"
   if provider="$(node --input-type=module - "$provider_hint" <<'NODE'
-import { activeProvider, llmAvailable } from './scripts/mnemazine-llm.mjs'
+import { activeProvider, llmAvailable, llmJson } from './scripts/mnemazine-llm.mjs'
 const provider = process.argv[2] || activeProvider()
 if (!llmAvailable(provider)) process.exit(1)
+const schema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok'],
+  properties: { ok: { type: 'boolean' } }
+}
+await llmJson('Return {"ok":true}.', schema, { provider, timeoutMs: 120000 })
 console.log(provider)
 NODE
   )"; then

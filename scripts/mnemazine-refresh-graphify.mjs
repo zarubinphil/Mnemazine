@@ -5,6 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import { graphStats as normalizedGraphStats, mergeGraphObjects, readGraph, writeGraph } from './mnemazine-graph-utils.mjs'
+import { resolveVault } from './mnemazine-paths.mjs'
 
 const argv = process.argv.slice(2)
 
@@ -23,7 +24,7 @@ const CONFIG_PATH = path.join(ROOT, 'config', 'graphify-refresh.json')
 const CONFIG = existsSync(CONFIG_PATH)
   ? JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))
   : {}
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(ROOT, 'vault')))
+const VAULT = resolveVault({ cli: arg('vault') })
 const MODE = arg('mode', 'auto')
 const BACKEND = arg('backend', process.env.MNEMAZINE_GRAPHIFY_BACKEND || CONFIG.backend || 'ollama')
 const CONFIG_BACKEND = CONFIG.backend || 'ollama'
