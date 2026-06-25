@@ -19,7 +19,7 @@ function hasFlag(name) {
   return argv.includes(`--${name}`)
 }
 
-const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(process.env.HOME || '.', 'Мозг')))
+const VAULT = path.resolve(arg('vault', process.env.MNEMAZINE_VAULT || path.join(process.env.HOME || '.', 'Brain')))
 const GRAPHIFY_OUT = path.join(VAULT, 'graphify-out')
 const GRAPH_PATH = path.join(GRAPHIFY_OUT, 'graph.json')
 const BACKEND = arg('backend', process.env.MNEMAZINE_GRAPHIFY_BACKEND || 'openai')
